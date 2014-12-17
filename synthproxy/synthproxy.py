@@ -3,6 +3,7 @@
 from __future__ import print_function
 
 import collections
+import copy
 from ConfigParser import SafeConfigParser
 import json
 import os.path
@@ -59,6 +60,9 @@ class SearchCache(object):
         del self.evictors[key]
         del self.cache[key]
 
+    def __str__(self):
+        return str(self.cache)
+
 class SynthProxy(proxybase.ProxyBase):
     """
     Proxy synthesizes search result attributes from database.
@@ -79,26 +83,13 @@ class SynthProxy(proxybase.ProxyBase):
         responses = searchCache.get(self.bind_dn, request)
         if responses is not None:
             if self.debug:
-                log.msg("[DEBUG] Retrieving result from cache for request {0}".format(repr(request)))
-                log.msg("[STATS] Retrieving results from cache.")
-            dlist = []
+                log.msg("[DEBUG] LDAP responses were cached for request {0}".format(repr(request)))
             for response in responses:
-                attributes = frozenset(request.attributes)
-                all_attributes = len(attributes) == 0
-                if all_attributes or 'memberOf' in attributes or 'member' in attributes:
-                    dn = response.objectName.lower() 
-                    d = self._getAuxilliaryAttributes(dn, response)
-                    d.addCallback(self._receivedAuxilliaryAttributes, response, request, controls, attributes)
-                    dlist.append(d)
-            dl = defer.DeferredList(dlist, consumeErrors=True)
-            def processList(lst):
-                for success, r in lst:
-                    reply(r)
-                reply(pureldap.LDAPSearchResultDone(resultCode=ldaperrors.Success.resultCode))
-            dl.addCallback(processList)
+                reply(response)
+            reply(pureldap.LDAPSearchResultDone(resultCode=ldaperrors.Success.resultCode))
             return None
         elif self.debug:
-            log.msg("[STATS] Retrieving results from proxied server.")
+            log.msg("[DEBUG] Results must be retrieved from proxied server.")
         return defer.succeed((request, controls))
 
     def handleProxiedResponse(self, response, request, controls):
@@ -128,13 +119,16 @@ class SynthProxy(proxybase.ProxyBase):
 
     def _getAuxilliaryAttributes(self, dn, response):
         """
+        Returns a deferred that will fire with a modified response
+        that will include any additional attributes.
         """
         cache = self.factory.dbcache
         entry = cache.get(dn)
         if entry is None:
-            if self.debug:
-                log.msg("[STATS] Aux. attributes fetched from DB.")
-            d0 = self.http_client.get(self.membership_view_url, auth=(self.db_user, self.db_passwd), params=dict(key=json.dumps(dn)))
+            d0 = self.http_client.get(
+                self.membership_view_url, 
+                auth=(self.db_user, self.db_passwd), 
+                params=dict(key=json.dumps(dn)))
             d0.addCallback(treq.json_content)
             d0.addErrback(self._receivedErrorFromDB, response)
             d0.addCallback(self._scheduleExpireCache, dn)
@@ -150,19 +144,27 @@ class SynthProxy(proxybase.ProxyBase):
                 cached.append(d)
             elif kind == 'result':
                 if self.debug:
-                    log.msg("[STATS] Aux. attributes fetched from cache.")
+                    log.msg("[DEBUG] Aux. attributes are already in the cache.")
                 d = defer.succeed(cached)
         return d
 
     def _processPending(self, result, pending, dn):
+        """
+        Cache the aux. attribute lookup.
+        Process pending aux. attribute lookups.
+        Fire each waiting deferred.
+        """
         self.factory.dbcache[dn] = ('result', result)
         debug = self.debug
         for d in pending:
             if debug:
-                log.msg("[STATS] Pending aux. attributes fetched from cache.")
+                log.msg("[DEBUG] Pending aux. attributes fetched from cache.")
             d.callback(result)
 
     def _scheduleExpireCache(self, result, dn):
+        """
+        Schedule the expiration of the cached aux. attribs.
+        """
         self.reactor.callLater(self.dbcache_lifetime, self._expireCache, dn)
         return result
 
