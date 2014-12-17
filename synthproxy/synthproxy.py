@@ -22,7 +22,7 @@ from twisted.python import log
 class SearchCache(object):
     """
     """
-    def __init__(self, capacity=1000, reactor_=reactor, lifetime=30):
+    def __init__(self, capacity=1000, reactor_=reactor, lifetime=240):
         """
         """
         self.cache = collections.OrderedDict()

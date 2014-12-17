@@ -1,0 +1,32 @@
+
+===========
+Performance
+===========
+
+--------------------------
+StartTLS and BIND Requests
+--------------------------
+* For specific puposes, the proxy could be allowed to accept anonymous BINDs.
+  The back-end could be queried with dedicated credentials.
+* Are BIND requests being cached?  Could they be?
+
+-----------------
+Attribute Caching
+-----------------
+* Attributes don't have to be evicted from the cache after a certain amount
+  of time.  CouchDB supports change notifications.
+
+---------------------
+LDAP Response Caching
+---------------------
+* These are also evicted from the cache after a small time elapses.
+  The eviction time could be increased, if data can be somewhat stale.
+  If the primary data of interest is coming from CouchDB, this could
+  be increased to a very large number, or even be triggered by an
+  eviction service.  E.g. each day a process runs to see if any subjects
+  were dropped and should be evicted from the cache.  It notifies the
+  proxy (via TCP, flat file, whatever) which then processes the evictions.
+* If there is only one primary service DN that is allowed to use the proxy,
+  the caching mechanism can be modified to not account for the BIND
+  information.  This would also hold true if all DNs that can query the 
+  proxy are required to have the same level of access.
