@@ -67,7 +67,7 @@ class SynthProxy(proxybase.ProxyBase):
     """
     Proxy synthesizes search result attributes from database.
     """
-    dbcache_lifetime = 60
+    dbcache_lifetime = 300
     bind_dn = None
 
     def handleBeforeForwardRequest(self, request, controls, reply):
@@ -130,13 +130,13 @@ class SynthProxy(proxybase.ProxyBase):
                 auth=(self.db_user, self.db_passwd), 
                 params=dict(key=json.dumps(dn)))
             d0.addCallback(treq.json_content)
-            d0.addErrback(self._receivedErrorFromDB, response)
             d0.addCallback(self._scheduleExpireCache, dn)
             pending = []
             d = defer.Deferred()
             pending.append(d)
             cache[dn] = ('pending', pending)
             d0.addCallback(self._processPending, pending, dn)
+            d0.addErrback(self._receivedErrorFromDB, pending, dn)
         else:
             kind, cached = entry
             if kind == 'pending':
@@ -148,17 +148,24 @@ class SynthProxy(proxybase.ProxyBase):
                 d = defer.succeed(cached)
         return d
 
-    def _processPending(self, result, pending, dn):
+    def _processPending(self, result, pending, dn, failed=False):
         """
         Cache the aux. attribute lookup.
         Process pending aux. attribute lookups.
         Fire each waiting deferred.
         """
-        self.factory.dbcache[dn] = ('result', result)
         debug = self.debug
+        if not failed:
+            if debug:
+                log.msg("[DEBUG] Caching aux attributes ...")
+            self.factory.dbcache[dn] = ('result', result)
         for d in pending:
             if debug:
-                log.msg("[DEBUG] Pending aux. attributes fetched from cache.")
+                if not failed:
+                    log.msg("[DEBUG] Pending aux. attributes fetched from cache.")
+                else:
+                    log.msg("[DEBUG] Failed to fetch aux attributes for pending request.")
+            
             d.callback(result)
 
     def _scheduleExpireCache(self, result, dn):
@@ -173,15 +180,16 @@ class SynthProxy(proxybase.ProxyBase):
             log.msg("[DEBUG] Expiring cached DN -> {0}".format(dn))
         del self.factory.dbcache[dn]
 
-    def _receivedErrorFromDB(self, err, response):
+    def _receivedErrorFromDB(self, err, pending, dn):
         """
         An error ocurred while trying to lookup the aux attributes.
         Log the error and reply with the standard attributes.
         """
-        log.msg("[ERROR] Could not retrieve external attributes.")
+        log.msg("[ERROR] Could not retrieve external attributes for '{0}.".format(dn))
         log.msg(str(err))
-        log.msg("Returning the raw response provided by the proxied server => {0}".format(repr(response)))
-        return response
+        d = defer.succeed(None)
+        d.addCallback(self._processPending, pending, dn, failed=True)
+        return d
     
     def _receivedAuxilliaryAttributes(self, doc, response, request, controls, requested_attributes):
         """
@@ -190,22 +198,23 @@ class SynthProxy(proxybase.ProxyBase):
         result.
         Otherwise, return the original result.
         """
-        attribs = response.attributes
-        all_attribs = len(requested_attributes) == 0
-        attrib_map = dict((k,v) for k, v in response.attributes)
-        rows = doc["rows"]
-        changed = False
-        for item in rows:
-            pair = item["value"]
-            attrib = pair[0]
-            if all_attribs or attrib in requested_attributes:
-                value = pair[1]
-                values = attrib_map.setdefault(attrib, [])
-                values.append(value)
-                changed = True
-        if changed:
-            temp = attrib_map.items()
-            attribs[:] = temp
+        if doc is not None:
+            attribs = response.attributes
+            all_attribs = len(requested_attributes) == 0
+            attrib_map = dict((k,v) for k, v in response.attributes)
+            rows = doc["rows"]
+            changed = False
+            for item in rows:
+                pair = item["value"]
+                attrib = pair[0]
+                if all_attribs or attrib in requested_attributes:
+                    value = pair[1]
+                    values = attrib_map.setdefault(attrib, [])
+                    values.append(value)
+                    changed = True
+            if changed:
+                temp = attrib_map.items()
+                attribs[:] = temp
         return response
 
 def load_config(filename="synthproxy.cfg"):
