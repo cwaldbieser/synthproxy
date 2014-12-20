@@ -175,7 +175,7 @@ def validate_config(config):
         'LDAP': frozenset(['proxied_url',]),
         } 
     optional = {
-        'Application': frozenset(['debug', 'port']),
+        'Application': frozenset(['debug', 'endpoint']),
         'LDAP': frozenset(['proxy_cert', 'use_starttls']),
         }
     valid = True
@@ -225,10 +225,10 @@ def main():
     log.startLogging(sys.stderr)
     scp = load_config()
     validate_config(scp)
-    if scp.has_option("Application", "port"):
-        port = scp.getint("Application", "port")
+    if scp.has_option("Application", "endpoint"):
+        endpoint = scp.get("Application", "endpoint")
     else:
-        port = 10389
+        endpoint = "tcp:10389"
     proxied_scheme, proxied_host, proxied_port = parse_url(
         scp.get("LDAP", "proxied_url"))
     factory = protocol.ServerFactory()
@@ -254,8 +254,7 @@ def main():
     factory.protocol = make_protocol
     factory.last_fails = {}
     factory.searchCache = SearchCache()
-    endpoint = serverFromString(reactor, "tcp:port={0}".format(port))
-    #endpoint = serverFromString(reactor, "ssl:port=10389:certKey=ssl/proxy.crt.pem:privateKey=ssl/proxy.key.pem")
+    endpoint = serverFromString(reactor, endpoint)
     endpoint.listen(factory)
     reactor.run()
 
