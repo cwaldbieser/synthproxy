@@ -152,7 +152,8 @@ class BindProxy(proxybase.ProxyBase):
             searchCache = self.factory.searchCache
             key = id(request)
             searchCache.store(self.bind_dn, request, searchResponses.get(key))
-            del searchResponses[key]
+            if key in searchResponses:
+                del searchResponses[key]
         return d
 
 def load_config(filename="bindproxy.cfg"):
@@ -175,7 +176,7 @@ def validate_config(config):
         'LDAP': frozenset(['proxied_url',]),
         } 
     optional = {
-        'Application': frozenset(['debug', 'endpoint']),
+        'Application': frozenset(['debug', 'endpoint', 'badpasswd_lifetime']),
         'LDAP': frozenset(['proxy_cert', 'use_starttls']),
         }
     valid = True
@@ -245,11 +246,16 @@ def main():
     use_tls = scp.getboolean('LDAP', 'use_starttls')
     cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
     debug_app = scp.getboolean('Application', 'debug')
+    if scp.has_option('Application', 'badpasswd_lifetime'):
+        badPasswdLifetime = scp.getint('Application', 'badpasswd_lifetime')
+    else:
+        badPasswdLifetime = 600
     def make_protocol():
         proto = BindProxy(cfg, use_tls=use_tls)
         proto.debug = debug_app
         proto.bind_dn = None
         proto.searchResponses = {}
+        proto.badPasswdLifetime = badPasswdLifetime
         return proto
     factory.protocol = make_protocol
     factory.last_fails = {}

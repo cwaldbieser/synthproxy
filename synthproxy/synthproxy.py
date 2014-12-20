@@ -114,7 +114,8 @@ class SynthProxy(proxybase.ProxyBase):
             searchCache = self.factory.searchCache
             key = id(request)
             searchCache.store(self.bind_dn, request, searchResponses.get(key))
-            del searchResponses[key]
+            if key in searchResponses:
+                del searchResponses[key]
         return d
 
     def _getAuxilliaryAttributes(self, dn, response):
