@@ -17,31 +17,75 @@ from twisted.internet import reactor, defer, ssl, protocol
 from twisted.internet.endpoints import serverFromString
 from twisted.python import log
 
-class SearchCache(object):
+class LRUCache(object):
     """
+    Least recently used cache.
+    """
+    def __init__(self, capacity=1000):
+        """
+        """
+        self.cache = collections.OrderedDict()
+        self.capacity = capacity
+
+    def get(self, key):
+        cache = self.cache
+        try:
+            value = cache.pop(key) 
+        except KeyError:
+            value = None
+        if value is not None:
+            cache[key] = value
+        return value
+
+    def store(self, key, value):
+        cache = self.cache   
+        try:
+            cache.pop(key)
+        except KeyError:
+            pass
+        cache[key] = value
+        if len(cache) > self.capacity:
+            evicted_key = cache.popitem(last=False)
+
+    def __str__(self):
+        return str(self.cache)
+
+class LRUTimedCache(object):
+    """
+    Least recently used cache.
+    Entries are evicted if they are not referenced within a configurable
+    span of time.
     """
     def __init__(self, capacity=1000, reactor_=reactor, lifetime=240):
-        """
-        """
         self.cache = collections.OrderedDict()
         self.capacity = capacity
         self.evictors = {}
         self.reactor = reactor_
         self.lifetime = lifetime
 
-    def get(self, bind_dn, request):
-        key = (bind_dn, repr(request))
-        responses = self.cache.get(key, None) 
-        return responses
+    def get(self, key):
+        cache = self.cache
+        evictors = self.evictors
+        try:
+            value = cache.pop(key) 
+        except KeyError:
+            value = None
+        if value is not None:
+            cache[key] = value 
+        evictor = evictors.get(key, None)
+        if evictor is not None:
+            evictor.cancel()
+        evictor = self.reactor.callLater(self.lifetime, self._evict, key)
+        evictors[key] = evictor
+        return value
 
-    def store(self, bind_dn, request, responses):
+    def store(self, key, value):
         cache = self.cache   
-        key = (bind_dn, repr(request))
         try:
             cache.pop(key)
         except KeyError:
             pass
-        cache[key] = responses
+        cache[key] = value
         evictors = self.evictors
         evictor = evictors.get(key, None)
         if evictor is not None:
@@ -90,7 +134,7 @@ class BindProxy(proxybase.ProxyBase):
                     return defer.succeed(None)
         searchCache = self.factory.searchCache
         responses = None
-        responses = searchCache.get(self.bind_dn, request)
+        responses = searchCache.get((self.bind_dn, repr(request)))
         if responses is not None:
             if self.debug:
                 log.msg("[DEBUG] LDAP responses were cached for request {0}".format(repr(request)))
@@ -106,33 +150,16 @@ class BindProxy(proxybase.ProxyBase):
         """
         Get the last failed password for a DN.
         """
-        last_fails = self.factory.last_fails
-        t = last_fails.get(dn, None)
-        if t is None:
-            return None
-        else:
-            badpasswd, __ = t
-            return badpasswd 
+        lastFailCache = self.factory.lastFailCache
+        badPasswd = lastFailCache.get(dn)
+        return badpasswd 
 
     def _setLastFailedPasswd(self, dn, badpasswd):
         """
         Record the last failed password for a DN and schedule an eviction from the cache.
         """
-        last_fails = self.factory.last_fails
-        if dn in last_fails:
-            __, evictor = last_fails[dn]
-            evictor.cancel()
-        evictor = self.reactor.callLater(self.badPasswdLifetime, self._evictBadPasswd, dn)
-        last_fails[dn] = (badpasswd, evictor)
-
-    def _evictBadPasswd(self, dn):
-        """
-        Evict a failed password from the cache.
-        """
-        last_fails = self.factory.last_fails
-        del last_fails[dn]
-        if self.debug:
-            log.msg("[DEBUG] Evicted failed password for DN '{0}'.".format(dn))
+        lastFailCache = self.factory.lastFailCache
+        lastFailCache.store(dn, badpasswd)
 
     def handleProxiedResponse(self, response, request, controls):
         """
@@ -151,7 +178,7 @@ class BindProxy(proxybase.ProxyBase):
         elif isinstance(response, pureldap.LDAPSearchResultDone):
             searchCache = self.factory.searchCache
             key = id(request)
-            searchCache.store(self.bind_dn, request, searchResponses.get(key))
+            searchCache.store((self.bind_dn, repr(request)), searchResponses.get(key))
             if key in searchResponses:
                 del searchResponses[key]
         return d
@@ -258,8 +285,9 @@ def main():
         proto.badPasswdLifetime = badPasswdLifetime
         return proto
     factory.protocol = make_protocol
-    factory.last_fails = {}
-    factory.searchCache = SearchCache()
+    factory.lastFailCache = LRUTimedCache(lifetime=600)
+    factory.bindCache = LRUTimedCache(lifetime=600)
+    factory.searchCache = LRUTimedCache()
     endpoint = serverFromString(reactor, endpoint)
     endpoint.listen(factory)
     reactor.run()
