@@ -5,6 +5,7 @@ from __future__ import print_function
 import collections
 import copy
 from ConfigParser import SafeConfigParser
+import hashlib
 import json
 import os.path
 import sys
@@ -111,8 +112,6 @@ class BindProxy(proxybase.ProxyBase):
     password and responds with a failure immediately instead of passing
     the credentials on to the proxied service.
     """
-    badPasswdLifetime = 600
-
     def handleBeforeForwardRequest(self, request, controls, reply):
         """
         Override to modify request and/or controls forwarded on to the proxied server.
@@ -123,14 +122,18 @@ class BindProxy(proxybase.ProxyBase):
         """
         if isinstance(request, pureldap.LDAPBindRequest): 
             dn = request.dn
-            badpasswd = self._getLastFailedPasswd(dn)
-            if badpasswd is not None:
-                if badpasswd == request.auth:
-                    log.msg("[INFO] Same bad credentials presented for DN '{0}'."
-                            "  Not forwarding to proxied service.".format( request.dn))
-                    response = pureldap.LDAPBindResponse(resultCode=49)
+            auth_digest = hashlib.md5(request.auth).hexdigest()
+            bind_info = self._getLastBind(dn)
+            if bind_info is not None:
+                digest, resultCode = bind_info
+                if self.debug:
+                    log.msg(("[DEBUG] curr digest == '{0}', "
+                             "last cached digest == '{1}'").format(auth_digest, digest))
+                if digest == auth_digest:
+                    log.msg("[INFO] Same invalid credentials presented for DN '{0}'."
+                            "  Not forwarding to proxied service.".format(dn))
+                    response = pureldap.LDAPBindResponse(resultCode=resultCode)
                     reply(response)
-                    self._setLastFailedPasswd(dn, badpasswd)
                     return defer.succeed(None)
         searchCache = self.factory.searchCache
         responses = None
@@ -146,28 +149,32 @@ class BindProxy(proxybase.ProxyBase):
             log.msg("[DEBUG] Results must be retrieved from proxied server.")
         return defer.succeed((request, controls))
 
-    def _getLastFailedPasswd(self, dn):
+    def _getLastBind(self, dn):
         """
-        Get the last failed password for a DN.
+        Get the last BIND password digest and result code for a DN.
         """
-        lastFailCache = self.factory.lastFailCache
-        badPasswd = lastFailCache.get(dn)
-        return badpasswd 
+        lastBindCache = self.factory.lastBindCache
+        return lastBindCache.get(dn)
 
-    def _setLastFailedPasswd(self, dn, badpasswd):
+    def _setLastBind(self, dn, passwd_digest, resultCode):
         """
-        Record the last failed password for a DN and schedule an eviction from the cache.
+        Record the last failed password digest and result code for 
+        a DN and schedule an eviction from the cache.
         """
-        lastFailCache = self.factory.lastFailCache
-        lastFailCache.store(dn, badpasswd)
+        lastBindCache = self.factory.lastBindCache
+        lastBindCache.store(dn, (passwd_digest, resultCode))
 
     def handleProxiedResponse(self, response, request, controls):
         """
         Append memberships/members to search results if those attributes
         were requested.
         """
-        if isinstance(response, pureldap.LDAPBindResponse) and response.resultCode == 49:
-            self._setLastFailedPasswd(request.dn, request.auth)
+        if isinstance(response, pureldap.LDAPBindResponse) and response.resultCode != 0L:
+            digest = hashlib.md5(request.auth).hexdigest()
+            self._setLastBind(
+                request.dn, digest, response.resultCode)
+            if self.debug:
+                log.msg("[DEBUG] Caching BIND digest '{0}'.".format(digest))
         searchResponses = self.searchResponses
         d = defer.succeed(response)
         if isinstance(response, pureldap.LDAPBindResponse) and response.resultCode == 0:
@@ -203,7 +210,7 @@ def validate_config(config):
         'LDAP': frozenset(['proxied_url',]),
         } 
     optional = {
-        'Application': frozenset(['debug', 'endpoint', 'badpasswd_lifetime']),
+        'Application': frozenset(['debug', 'endpoint', 'bind_cache_lifetime']),
         'LDAP': frozenset(['proxy_cert', 'use_starttls']),
         }
     valid = True
@@ -274,19 +281,17 @@ def main():
     cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
     debug_app = scp.getboolean('Application', 'debug')
     if scp.has_option('Application', 'badpasswd_lifetime'):
-        badPasswdLifetime = scp.getint('Application', 'badpasswd_lifetime')
+        bindCacheLifetime = scp.getint('Application', 'bind_cache_lifetime')
     else:
-        badPasswdLifetime = 600
+        bindCacheLifetime = 600
     def make_protocol():
         proto = BindProxy(cfg, use_tls=use_tls)
         proto.debug = debug_app
         proto.bind_dn = None
         proto.searchResponses = {}
-        proto.badPasswdLifetime = badPasswdLifetime
         return proto
     factory.protocol = make_protocol
-    factory.lastFailCache = LRUTimedCache(lifetime=600)
-    factory.bindCache = LRUTimedCache(lifetime=600)
+    factory.lastBindCache = LRUTimedCache(lifetime=bindCacheLifetime)
     factory.searchCache = LRUTimedCache()
     endpoint = serverFromString(reactor, endpoint)
     endpoint.listen(factory)
