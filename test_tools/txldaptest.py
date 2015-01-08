@@ -22,6 +22,7 @@ def example(stats):
     test_starttls = True
     test_bind = True
     test_search = False
+    unbind = True
     with open("dn_list.txt", "r") as f:
         dns = [line.strip() for line in f]
         
@@ -43,8 +44,9 @@ def example(stats):
                 pass
         if test_search:
             o = ldapsyntax.LDAPEntry(client, basedn)
-            results = yield o.search(filterText=query, attributes=attributes.keys())
-        client.unbind()
+            results = yield o.search(filterText="(uid=xyzzy)", attributes=['uid'])
+        if unbind:
+            client.unbind()
         stats['successful'] += 1
         stats['suc_per_s'] += 1
 
@@ -56,7 +58,10 @@ if __name__ == '__main__':
         'suc_per_s': 0}
     df = example(stats)
     df.addErrback(lambda err: err.printTraceback())
-    df.addCallback(lambda _: reactor.stop())
+    def stopit(_):
+        if reactor.running:
+            reactor.stop()
+    df.addCallback(stopit)
     lc = LoopingCall(report, stats=stats)
     lc.start(1)
     reactor.run()
