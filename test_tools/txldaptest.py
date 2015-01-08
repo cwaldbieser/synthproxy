@@ -1,7 +1,8 @@
 #! /usr/bin/env python
 
 from __future__ import print_function
-from twisted.internet import reactor, defer
+import argparse
+from twisted.internet import reactor, defer, task
 from ldaptor.protocols.ldap import ldapclient, ldapsyntax, ldapconnector
 from ldaptor.protocols.ldap.ldaperrors import LDAPInvalidCredentials
 from twisted.internet.task import LoopingCall
@@ -50,7 +51,7 @@ def example(stats):
         stats['successful'] += 1
         stats['suc_per_s'] += 1
 
-if __name__ == '__main__':
+def main(reactor_):
     stats = {
         'attempted': 0, 
         'successful': 0,
@@ -59,9 +60,13 @@ if __name__ == '__main__':
     df = example(stats)
     df.addErrback(lambda err: err.printTraceback())
     def stopit(_):
-        if reactor.running:
-            reactor.stop()
+        if reactor_.running:
+            reactor_.stop()
     df.addCallback(stopit)
     lc = LoopingCall(report, stats=stats)
     lc.start(1)
-    reactor.run()
+    return df
+
+if __name__ == '__main__':
+    task.react(main)
+
