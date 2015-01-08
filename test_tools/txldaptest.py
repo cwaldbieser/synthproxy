@@ -19,16 +19,10 @@ def report(stats):
     print("")
 
 @defer.inlineCallbacks
-def example(stats):
-    test_starttls = True
-    test_bind = True
-    test_search = False
-    unbind = True
-    with open("dn_list.txt", "r") as f:
+def example(dn_file, stats, basedn, test_starttls, test_bind, test_search, unbind):
+    with open(dn_file, "r") as f:
         dns = [line.strip() for line in f]
-        
     serverip = '127.0.0.1'
-    basedn = 'o=lafayette'
     bindpw = 'secret'
     for n, binddn in enumerate(dns):
         c = ldapconnector.LDAPClientCreator(reactor, ldapclient.LDAPClient)
@@ -51,13 +45,17 @@ def example(stats):
         stats['successful'] += 1
         stats['suc_per_s'] += 1
 
-def main(reactor_):
+def runTest(reactor_, args):
     stats = {
         'attempted': 0, 
         'successful': 0,
         'att_per_s': 0,
         'suc_per_s': 0}
-    df = example(stats)
+    starttls = not args.no_starttls
+    bind = not args.no_bind
+    search = args.search
+    unbind = not args.no_unbind
+    df = example(args.dn_file, stats, args.base_dn, starttls, bind, search, unbind)
     df.addErrback(lambda err: err.printTraceback())
     def stopit(_):
         if reactor_.running:
@@ -67,6 +65,39 @@ def main(reactor_):
     lc.start(1)
     return df
 
+def main(args):
+    task.react(runTest, [args])
+
 if __name__ == '__main__':
-    task.react(main)
+    parser = argparse.ArgumentParser(description="LDAP test client.")
+    parser.add_argument(
+        'dn_file',
+        action='store',
+        help='Read DNs to query from file, one per line.')
+    parser.add_argument(
+        'base_dn',
+        action='store',
+        help="The base DN from which to search.")
+    parser.add_argument(
+        '-B',
+        '--no-bind',
+        action='store_true',
+        help="Don't test BINDs.")
+    parser.add_argument(
+        '-T',
+        '--no-starttls',
+        action='store_true',
+        help="Don't test startTLS.")
+    parser.add_argument(
+        '-s',
+        '--search',
+        action='store_true',
+        help="Test searches.")
+    parser.add_argument(
+        '-U',
+        '--no-unbind',
+        action='store_true',
+        help="Don't unbind after requests are completed-- let the connection hang.")
+    args = parser.parse_args()
+    main(args)
 
