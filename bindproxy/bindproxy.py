@@ -25,12 +25,13 @@ class LRUTimedCache(object):
     Entries are evicted if they are not referenced within a configurable
     span of time.
     """
-    def __init__(self, capacity=2000, reactor_=reactor, lifetime=600):
+    def __init__(self, capacity=2000, reactor_=reactor, lifetime=600, reset_on_access=False):
         self.cache = collections.OrderedDict()
         self.capacity = capacity
         self.evictors = {}
         self.reactor = reactor_
         self.lifetime = lifetime
+        self.reset_on_access = reset_on_access
 
     def get(self, key):
         cache = self.cache
@@ -41,11 +42,12 @@ class LRUTimedCache(object):
             value = None
         if value is not None:
             cache[key] = value 
-        evictor = evictors.get(key, None)
-        if evictor is not None:
-            evictor.cancel()
-        evictor = self.reactor.callLater(self.lifetime, self._evict, key)
-        evictors[key] = evictor
+        if self.reset_on_access:
+            evictor = evictors.get(key, None)
+            if evictor is not None:
+                evictor.cancel()
+            evictor = self.reactor.callLater(self.lifetime, self._evict, key)
+            evictors[key] = evictor
         return value
 
     def store(self, key, value):
