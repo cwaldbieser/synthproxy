@@ -95,9 +95,10 @@ class LRUTimedCache(object):
         evictors[key] = evictor
         if len(cache) > self.capacity:
             evicted_key = cache.popitem(last=False)
-            evictor = evictors[evicted_key]
-            evictor.cancel()
-            del evictors[evicted_key]
+            evictor = evictors.get(evicted_key, None)
+            if evictor is not None:
+                evictor.cancel()
+                del evictors[evicted_key]
 
     def _evict(self, key):
         del self.evictors[key]
