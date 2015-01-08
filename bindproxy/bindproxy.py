@@ -101,7 +101,9 @@ class LRUTimedCache(object):
 
     def _evict(self, key):
         del self.evictors[key]
-        del self.cache[key]
+        cache = self.cache
+        if key in cache:
+            del cache[key]
 
     def __str__(self):
         return str(self.cache)
