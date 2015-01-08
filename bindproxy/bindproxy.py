@@ -18,38 +18,6 @@ from twisted.internet import reactor, defer, ssl, protocol
 from twisted.internet.endpoints import serverFromString
 from twisted.python import log
 
-class LRUCache(object):
-    """
-    Least recently used cache.
-    """
-    def __init__(self, capacity=1000):
-        """
-        """
-        self.cache = collections.OrderedDict()
-        self.capacity = capacity
-
-    def get(self, key):
-        cache = self.cache
-        try:
-            value = cache.pop(key) 
-        except KeyError:
-            value = None
-        if value is not None:
-            cache[key] = value
-        return value
-
-    def store(self, key, value):
-        cache = self.cache   
-        try:
-            cache.pop(key)
-        except KeyError:
-            pass
-        cache[key] = value
-        if len(cache) > self.capacity:
-            evicted_key = cache.popitem(last=False)
-
-    def __str__(self):
-        return str(self.cache)
 
 class LRUTimedCache(object):
     """
@@ -57,7 +25,7 @@ class LRUTimedCache(object):
     Entries are evicted if they are not referenced within a configurable
     span of time.
     """
-    def __init__(self, capacity=1000, reactor_=reactor, lifetime=240):
+    def __init__(self, capacity=2000, reactor_=reactor, lifetime=600):
         self.cache = collections.OrderedDict()
         self.capacity = capacity
         self.evictors = {}
@@ -213,7 +181,7 @@ def validate_config(config):
         'LDAP': frozenset(['proxied_url',]),
         } 
     optional = {
-        'Application': frozenset(['debug', 'endpoint', 'bind_cache_lifetime']),
+        'Application': frozenset(['debug', 'endpoint', 'bind_cache_lifetime', 'bind_cache_size']),
         'LDAP': frozenset(['proxy_cert', 'use_starttls']),
         }
     valid = True
@@ -283,10 +251,14 @@ def main():
     use_tls = scp.getboolean('LDAP', 'use_starttls')
     cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
     debug_app = scp.getboolean('Application', 'debug')
-    if scp.has_option('Application', 'badpasswd_lifetime'):
+    if scp.has_option('Application', 'bind_cache_lifetime'):
         bindCacheLifetime = scp.getint('Application', 'bind_cache_lifetime')
     else:
         bindCacheLifetime = 600
+    if scp.has_option('Application', 'bind_cache_size'):
+        bindCacheSize = scp.getint('Application', 'bind_cache_size')
+    else:
+        bindCacheSize = 2000
     def make_protocol():
         proto = BindProxy(cfg, use_tls=use_tls)
         proto.debug = debug_app
@@ -294,7 +266,7 @@ def main():
         proto.searchResponses = {}
         return proto
     factory.protocol = make_protocol
-    factory.lastBindCache = LRUTimedCache(lifetime=bindCacheLifetime)
+    factory.lastBindCache = LRUTimedCache(lifetime=bindCacheLifetime, capacity=bindCacheSize)
     factory.searchCache = LRUTimedCache()
     endpoint = serverFromString(reactor, endpoint)
     endpoint.listen(factory)
