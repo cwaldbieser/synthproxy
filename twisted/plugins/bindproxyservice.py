@@ -18,7 +18,7 @@ class Options(usage.Options):
         ]
 
     optParameters = [
-                        ["endpoint", "e", "tcp:10389", "The endpoint listen on (default 'tcp:10389')."],
+                        ["endpoint", "e", None, "The endpoint listen on (default 'tcp:10389')."],
                         ["instance-config", "c", None, "Instance configuration overrides settings from other configs."],
                     ]
 

@@ -2,7 +2,6 @@
 
 from __future__ import print_function
 
-import collections
 import copy
 from ConfigParser import SafeConfigParser
 import hashlib
@@ -10,6 +9,9 @@ import json
 import os.path
 import sys
 from urlparse import urlparse
+
+from proxies.lru import LRUTimedCache, LRUClusterProtocolFactory, \
+                        LRUClusterClient, make_cluster_func
 
 from ldaptor import config
 from ldaptor.protocols import pureldap
@@ -19,66 +21,6 @@ from twisted.internet.endpoints import serverFromString
 from twisted.python import log
 from twisted.application import service
 
-
-class LRUTimedCache(object):
-    """
-    Least recently used cache.
-    Entries are evicted if they are not referenced within a configurable
-    span of time.
-    """
-    def __init__(self, capacity=2000, reactor_=reactor, lifetime=600, reset_on_access=False):
-        self.cache = collections.OrderedDict()
-        self.capacity = capacity
-        self.evictors = {}
-        self.reactor = reactor_
-        self.lifetime = lifetime
-        self.reset_on_access = reset_on_access
-
-    def get(self, key):
-        cache = self.cache
-        evictors = self.evictors
-        try:
-            value = cache.pop(key) 
-        except KeyError:
-            value = None
-        if value is not None:
-            cache[key] = value 
-        if self.reset_on_access:
-            evictor = evictors.get(key, None)
-            if evictor is not None:
-                evictor.cancel()
-            evictor = self.reactor.callLater(self.lifetime, self._evict, key)
-            evictors[key] = evictor
-        return value
-
-    def store(self, key, value):
-        cache = self.cache   
-        try:
-            cache.pop(key)
-        except KeyError:
-            pass
-        cache[key] = value
-        evictors = self.evictors
-        evictor = evictors.get(key, None)
-        if evictor is not None:
-            evictor.cancel()
-        evictor = self.reactor.callLater(self.lifetime, self._evict, key)
-        evictors[key] = evictor
-        if len(cache) > self.capacity:
-            evicted_key = cache.popitem(last=False)
-            evictor = evictors.get(evicted_key, None)
-            if evictor is not None:
-                evictor.cancel()
-                del evictors[evicted_key]
-
-    def _evict(self, key):
-        del self.evictors[key]
-        cache = self.cache
-        if key in cache:
-            del cache[key]
-
-    def __str__(self):
-        return str(self.cache)
 
 class BindProxy(proxybase.ProxyBase):
     """
@@ -175,7 +117,9 @@ def load_config(filename="bindproxy.cfg", instance_config=None):
     config_files = [system, user, local]
     if instance_config is not None:
         config_files.append(instance_config)
+    log.msg("[DEBUG] Trying to read configs: {0} ...".format(', '.join(config_files)))
     files_read = scp.read(config_files)
+    log.msg("[DEBUG] Actually read configs: {0} ...".format(', '.join(config_files)))
     assert len(files_read) > 0, "No config file found."
     return scp
 
@@ -186,9 +130,16 @@ def validate_config(config):
     required = {
         'LDAP': frozenset(['proxied_url',]),
         } 
+    def isValidClusterOption(opt):
+        if opt == "endpoint":
+            return True
+        if opt.startswith("peer"):
+            return True
+        return False
     optional = {
-        'Application': frozenset(['debug', 'endpoint', 'bind_cache_lifetime', 'bind_cache_size']),
-        'LDAP': frozenset(['proxy_cert', 'use_starttls']),
+        'Application': lambda x: x in frozenset(['debug', 'endpoint', 'bind_cache_lifetime', 'bind_cache_size']),
+        'LDAP': lambda x: x in frozenset(['proxy_cert', 'use_starttls']),
+        'Cluster': isValidClusterOption
         }
     valid = True
     for section, options in required.iteritems():
@@ -207,10 +158,10 @@ def validate_config(config):
             log.msg("[WARNING] Section '{0}' is not recognized.".format(section))
             continue
         required_options = required.get(section, nullset)
-        optional_options = optional.get(section, nullset)
+        optional_test = optional.get(section, nullset)
         for option in config.options(section):
             is_required = option in required_options
-            is_optional = option in optional_options
+            is_optional = optional_test(option)
             if not (is_required or is_optional):
                 log.msg("[WARNING] Option '{0}:{1}' is not recognized.".format(section, option))
                 continue
@@ -233,6 +184,7 @@ def parse_url(url):
 class BindProxyService(service.Service):
     def __init__(self, instance_config=None, endpoint=None):
         self._port = None
+        self._cluster_port = None
         self.instance_config = instance_config
         self.endpoint = endpoint
 
@@ -270,6 +222,25 @@ class BindProxyService(service.Service):
             bindCacheSize = scp.getint('Application', 'bind_cache_size')
         else:
             bindCacheSize = 2000
+        use_cluster = False
+        if scp.has_section("Cluster"):
+            cluster_endpoint = None
+            cluster_peers = []
+            if not scp.has_option("Cluster", "endpoint"):
+                log.msg("[ERROR] Section 'Cluster' does not define an 'endpoint' option.")
+                sys.exit(1)
+            cluster_endpoint = scp.get("Cluster", "endpoint")
+            options = scp.options("Cluster")
+            has_peer = False
+            for option in options:
+                if option.startswith("peer"):
+                    has_peer = True
+                    cluster_peers.append(scp.get("Cluster", option))
+            if not has_peer:
+                log.msg("[ERROR] Section 'Cluster' does not have any 'peerxxx' options.")
+                sys.exit(1)
+            use_cluster = True
+            clusterClient = LRUClusterClient(cluster_peers)
         def make_protocol():
             proto = BindProxy(cfg, use_tls=use_tls)
             proto.debug = debug_app
@@ -277,19 +248,48 @@ class BindProxyService(service.Service):
             proto.searchResponses = {}
             return proto
         factory.protocol = make_protocol
-        factory.lastBindCache = LRUTimedCache(lifetime=bindCacheLifetime, capacity=bindCacheSize)
-        factory.searchCache = LRUTimedCache()
-        endpoint = serverFromString(reactor, endpoint)
-        d = endpoint.listen(factory)
+        kwds = {}
+        if use_cluster:
+            kwds['cluster_func'] = make_cluster_func('bind', clusterClient)
+        factory.lastBindCache = LRUTimedCache(lifetime=bindCacheLifetime, capacity=bindCacheSize, **kwds)
+        kwds = {}
+        if use_cluster:
+            kwds['cluster_func'] = make_cluster_func('string', clusterClient)
+        factory.searchCache = LRUTimedCache(**kwds)
+        ep = serverFromString(reactor, endpoint)
+        d = ep.listen(factory)
         d.addCallback(self.set_listening_port)
+        log.msg("[DEBUG] use_cluster: {0}".format(use_cluster))
+        if use_cluster:
+            log.msg("[DEBUG] Using cluster mode.")
+            log.msg("[DEBUG] Cluster endpoint: {0}".format(cluster_endpoint))
+            ep = serverFromString(reactor, cluster_endpoint)
+            cache_map = {
+                'bind': factory.lastBindCache,
+                'search': factory.searchCache,}
+            cluster_proto_factory = LRUClusterProtocolFactory(cache_map)
+            log.msg("[DEBUG] Schedule listening on cluster endpoint.")
+            d = ep.listen(cluster_proto_factory)
+            log.msg("[DEBUG] Adding callback ...")
+            d.addCallback(self.set_cluster_port)
+            log.msg("[DEBUG] Adding errback ...")
+            d.addErrback(log.err)
+            log.msg("[DEBUG] All is scheduled.")
 
     def set_listening_port(self, port):
+        log.msg("[DEBUG] Listening on proxy port.")
         self._port = port
+
+    def set_cluster_port(self, port):
+        log.msg("[DEBUG] Listening on cluster port.")
+        self._cluster_port = port
         
     def stopService(self):
         """
         Stop the service.
         """
+        if self._cluster_port is not None:
+            self._cluster_port.stopListening()
         if self._port is not None:
             return self._port.stopListening()
 
