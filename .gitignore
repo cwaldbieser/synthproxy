@@ -1,0 +1,4 @@
+*.pyc
+/ssl
+*.cfg
+twisted/plugins/dropin.cache
