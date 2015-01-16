@@ -17,6 +17,7 @@ from ldaptor.protocols.ldap import proxybase, ldaperrors
 from twisted.internet import reactor, defer, ssl, protocol
 from twisted.internet.endpoints import serverFromString
 from twisted.python import log
+from twisted.application import service
 
 
 class LRUTimedCache(object):
@@ -163,7 +164,7 @@ class BindProxy(proxybase.ProxyBase):
                 del searchResponses[key]
         return d
 
-def load_config(filename="bindproxy.cfg"):
+def load_config(filename="bindproxy.cfg", instance_config=None):
     """
     Load the proxy configuration.
     """
@@ -171,7 +172,10 @@ def load_config(filename="bindproxy.cfg"):
     system = os.path.join("/etc", filename)
     user = os.path.join(os.path.expanduser("~/"), ".{0}".format(filename))
     local = os.path.join(".", filename) 
-    files_read = scp.read([system, user, local])
+    config_files = [system, user, local]
+    if instance_config is not None:
+        config_files.append(instance_config)
+    files_read = scp.read(config_files)
     assert len(files_read) > 0, "No config file found."
     return scp
 
@@ -226,54 +230,67 @@ def parse_url(url):
         port = 389
     return (p.scheme, host, port)
 
-def main():
-    """
-    LDAP Proxy
-    """
-    log.startLogging(sys.stderr)
-    scp = load_config()
-    validate_config(scp)
-    if scp.has_option("Application", "endpoint"):
-        endpoint = scp.get("Application", "endpoint")
-    else:
-        endpoint = "tcp:10389"
-    proxied_scheme, proxied_host, proxied_port = parse_url(
-        scp.get("LDAP", "proxied_url"))
-    factory = protocol.ServerFactory()
-    if scp.has_option("LDAP", "proxy_cert"):
-        proxy_cert = scp.get("LDAP", "proxy_cert")
-        with open("ssl/proxy.pem", "r") as f:
-            certData = f.read()
-        cert = ssl.PrivateCertificate.loadPEM(certData)
-        factory.options = cert.options()
-    proxied = (proxied_host, proxied_port)
-    if proxied_scheme == 'ldaps':
-        log.msg("[ERROR] `ldaps` scheme is not supported.")
-        sys.exit(0)
-    use_tls = scp.getboolean('LDAP', 'use_starttls')
-    cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
-    debug_app = scp.getboolean('Application', 'debug')
-    if scp.has_option('Application', 'bind_cache_lifetime'):
-        bindCacheLifetime = scp.getint('Application', 'bind_cache_lifetime')
-    else:
-        bindCacheLifetime = 600
-    if scp.has_option('Application', 'bind_cache_size'):
-        bindCacheSize = scp.getint('Application', 'bind_cache_size')
-    else:
-        bindCacheSize = 2000
-    def make_protocol():
-        proto = BindProxy(cfg, use_tls=use_tls)
-        proto.debug = debug_app
-        proto.bind_dn = None
-        proto.searchResponses = {}
-        return proto
-    factory.protocol = make_protocol
-    factory.lastBindCache = LRUTimedCache(lifetime=bindCacheLifetime, capacity=bindCacheSize)
-    factory.searchCache = LRUTimedCache()
-    endpoint = serverFromString(reactor, endpoint)
-    endpoint.listen(factory)
-    reactor.run()
+class BindProxyService(service.Service):
+    def __init__(self, instance_config=None, endpoint=None):
+        self._port = None
+        self.instance_config = instance_config
+        self.endpoint = endpoint
 
-if __name__ == '__main__':
-    main()
+    def startService(self):
+        #log.startLogging(sys.stderr)
+        scp = load_config(instance_config=self.instance_config)
+        validate_config(scp)
+        endpoint = self.endpoint
+        if endpoint is None:
+            if scp.has_option("Application", "endpoint"):
+                endpoint = scp.get("Application", "endpoint")
+            else:
+                endpoint = "tcp:10389"
+        proxied_scheme, proxied_host, proxied_port = parse_url(
+            scp.get("LDAP", "proxied_url"))
+        factory = protocol.ServerFactory()
+        if scp.has_option("LDAP", "proxy_cert"):
+            proxy_cert = scp.get("LDAP", "proxy_cert")
+            with open("ssl/proxy.pem", "r") as f:
+                certData = f.read()
+            cert = ssl.PrivateCertificate.loadPEM(certData)
+            factory.options = cert.options()
+        proxied = (proxied_host, proxied_port)
+        if proxied_scheme == 'ldaps':
+            log.msg("[ERROR] `ldaps` scheme is not supported.")
+            sys.exit(0)
+        use_tls = scp.getboolean('LDAP', 'use_starttls')
+        cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
+        debug_app = scp.getboolean('Application', 'debug')
+        if scp.has_option('Application', 'bind_cache_lifetime'):
+            bindCacheLifetime = scp.getint('Application', 'bind_cache_lifetime')
+        else:
+            bindCacheLifetime = 600
+        if scp.has_option('Application', 'bind_cache_size'):
+            bindCacheSize = scp.getint('Application', 'bind_cache_size')
+        else:
+            bindCacheSize = 2000
+        def make_protocol():
+            proto = BindProxy(cfg, use_tls=use_tls)
+            proto.debug = debug_app
+            proto.bind_dn = None
+            proto.searchResponses = {}
+            return proto
+        factory.protocol = make_protocol
+        factory.lastBindCache = LRUTimedCache(lifetime=bindCacheLifetime, capacity=bindCacheSize)
+        factory.searchCache = LRUTimedCache()
+        endpoint = serverFromString(reactor, endpoint)
+        d = endpoint.listen(factory)
+        d.addCallback(self.set_listening_port)
+
+    def set_listening_port(self, port):
+        self._port = port
+        
+    def stopService(self):
+        """
+        Stop the service.
+        """
+        if self._port is not None:
+            return self._port.stopListening()
+
 

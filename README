@@ -1,0 +1,26 @@
+##################
+LDAP Proxy Servers
+##################
+
+---------
+BindProxy
+---------
+
+Records failed BIND attempts.  If the same invalid credentials are presented,
+a failure response is returned, and the proxied LDAP service is *not* consulted.
+
+The use case is to prevent account lockouts due to the *same* bad credentials
+being repeatedly presented (e.g. by a misconfigured mail client).
+
+=====
+Usage
+=====
+
+To run in the foreground::
+
+    $ twistd -n bindproxy
+
+To run as a daemon::
+
+    $ twisted bindproxy
+
