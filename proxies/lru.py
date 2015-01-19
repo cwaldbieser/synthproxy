@@ -27,13 +27,15 @@ class LRUClusterClientProtocol(NetstringReceiver):
     connectionLostCallback = None
     peer = None
 
+    def __init__(self, failOK=False):
+        self.failOK = failOK
+
     def sendMessage(self, label, key, value):
         msg = dumps((label, key, value))
         self.sendString(msg)
     
     def connectionLost(self, reason):
-        if reason != connectionDone:
-            self.connectionLostCallback(self.peer, reason)
+        self.connectionLostCallback(self.peer, reason, failOK=self.failOK)
 
 class LRUClusterClient(object):
     retry_delay = 10
@@ -55,22 +57,29 @@ class LRUClusterClient(object):
         self.connections[peer] = proto
         log.msg("[INFO] Successfully connected to peer: {0}.".format(peer))
 
-    def connectionLost(self, peer, err):
-        log.msg("[WARNING] Connection to peer {0} was lost.\n{1}".format(peer, err))
+    def connectionLost(self, peer, err, failOK=False):
+        if not failOK and type(err.value) != type(connectionDone.value):
+            log.msg("[WARNING] Connection to peer {0} was lost.\n{1}".format(peer, err))
+            msg = "[INFO] Reconnecting to peer {0}".format(peer)
+        else:
+            log.msg("[INFO] Peer {0} has disconnected.".format(peer))
+            msg = None
+            failOK = True
         self.reactor.callLater(
-            self.retry_delay, self.connectToPeer, peer, "[INFO] Reconnecting to peer {0}".format(peer))
+            self.retry_delay, self.connectToPeer, peer, msg, failOK=failOK)
 
-    def failedToConnectToPeer(self, err, peer):
-        log.msg("[ERROR] Was unable to connect to peer {0}:\n{1}".format(peer, err))
+    def failedToConnectToPeer(self, err, peer, failOK=False):
+        if not failOK:
+            log.msg("[ERROR] Was unable to connect to peer {0}:\n{1}".format(peer, err))
         self.reactor.callLater(
-            self.retry_delay, self.connectToPeer, peer, "[INFO] Reconnecting to peer {0}".format(peer))
+            self.retry_delay, self.connectToPeer, peer, "[INFO] Reconnecting to peer {0}".format(peer), failOK=failOK)
 
-    def connectToPeer(self, peer, msg=None):
+    def connectToPeer(self, peer, msg=None, failOK=False):
         if msg is not None:
             log.msg(msg)
-        d = connectProtocol(clientFromString(self.reactor, peer), LRUClusterClientProtocol()) 
+        d = connectProtocol(clientFromString(self.reactor, peer), LRUClusterClientProtocol(failOK=failOK)) 
         d.addCallback(self.connectedToPeer, peer)
-        d.addErrback(self.failedToConnectToPeer, peer)
+        d.addErrback(self.failedToConnectToPeer, peer, failOK=failOK)
 
     def sendMessage(self, label, key, value):
         connections = self.connections
