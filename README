@@ -24,3 +24,42 @@ To run as a daemon::
 
     $ twisted bindproxy
 
+========
+Clusters
+========
+
+Because Twisted is single threaded, it may be desirable to run multiple
+bindproxy daemons on a multi-core/multi-processor host if it is determined
+that the service is CPU bound during high load (i.e. if the CPU becomes
+a bottleneck).  It is possible this may occur because LDAP requests and
+responses are encoded/decoded using pure Python.
+
+To take advantage of multiple cores/processors in a CPU-bound scenario,
+multiple bindproxy services may be run and place behind a TCP load
+balancer.  The services can be configured to communicate their cache
+states amongst each other.
+
+To run a cluster of bindproxy daemons, create one config file for each node.
+This config file will inherit from the usual places (system, user, local
+configs).  It should specify the endpoint for the LRU cluster service and
+the endpoint for each peer.  For example (:file:`bindproxy-0.cfg`)::
+
+    [Application]
+    endpoint = tcp:10390
+
+    [Cluster]
+    endpoint = unix:address=/tmp/bindproxy/bp0.sock
+    peer0 = unix:path=/tmp/bindproxy/bp1.sock
+
+If your config files follow this naming convention, you can use the shell script
+:program:`bpcluster.sh` to run :program:`twistd bindproxy` with the appropriate 
+arguments for each node.  When a node starts up, it will try to connect to its 
+peers.  It will retry at intervals until the peer connections have been 
+established.
+
+When a node records an invalid BIND or a search result, it communicates the 
+cached results to its peers.
+
+The `twistd balancer` command may be used to create a simple TCP load balancer
+in front of the cluster.
+
