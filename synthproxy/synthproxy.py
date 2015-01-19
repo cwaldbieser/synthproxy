@@ -10,7 +10,7 @@ import os.path
 import sys
 from urlparse import urlparse
 
-import http
+import httpclient
 from ldaptor import config
 from ldaptor.protocols import pureldap
 from ldaptor.protocols.ldap import proxybase, ldaperrors
@@ -333,7 +333,7 @@ def main():
         proto.membership_view_url = db_url
         proto.db_user = db_user
         proto.db_passwd = db_passwd
-        proto.http_client = http
+        proto.http_client = httpclient
         proto.searchResponses = {}
         return proto
     factory.protocol = make_protocol
