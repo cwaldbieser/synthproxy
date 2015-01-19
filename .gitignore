@@ -2,3 +2,5 @@
 /ssl
 *.cfg
 twisted/plugins/dropin.cache
+*.pid
+*.log

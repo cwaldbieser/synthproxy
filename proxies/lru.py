@@ -11,13 +11,11 @@ from twisted.python import log
 class LRUClusterProtocol(NetstringReceiver):
     def stringReceived(self, string):
         label, key, value = loads(string)
-        log.msg("[DEBUG] Received : {0}: {1} => {2}".format(label, key, value))        
         cache_map = self.factory.cache_map
         cache = cache_map.get(label, None)
         if cache:
             if not cache.peek(key, value):
                 cache.store(key, value, from_remote=True)
-                log.msg("[DEBUG] Stored {0}:{1}:{2} from remote cache.".format(label, key, value))
 
 class LRUClusterProtocolFactory(Factory):
     protocol = LRUClusterProtocol
@@ -43,6 +41,11 @@ class LRUClusterClient(object):
     def __init__(self, peers, reactor_=reactor):
         self.reactor = reactor_
         self.connections = {}
+        self.reactor.callLater(self.retry_delay, self.startConnecting)
+        self.peers = peers
+
+    def startConnecting(self):
+        peers = self.peers
         for peer in peers:
             self.connectToPeer(peer)
 
@@ -50,6 +53,7 @@ class LRUClusterClient(object):
         proto.connectionLostCallback = self.connectionLost
         proto.peer = peer
         self.connections[peer] = proto
+        log.msg("[INFO] Successfully connected to peer: {0}.".format(peer))
 
     def connectionLost(self, peer, err):
         log.msg("[WARNING] Connection to peer {0} was lost.\n{1}".format(peer, err))
@@ -71,15 +75,11 @@ class LRUClusterClient(object):
     def sendMessage(self, label, key, value):
         connections = self.connections
         for peer, proto in connections.iteritems():
-            log.msg("[DEBUG] Sending to peer: {0} ...".format(peer))
-            log.msg("[DEBUG] Sending via proto: {0} ...".format(proto.__class__))
             proto.sendMessage(label, key, value)
 
 def make_cluster_func(label, peer_manager):
     def cluster_func(key, value):
-        log.msg("[DEBUG] cluster_func(): About to send message: {0}:{1}:{2}".format(label, key, value))
         peer_manager.sendMessage(label, key, value)
-        log.msg("[DEBUG] cluster_func(): Sent message.")
     return cluster_func
 
 class LRUTimedCache(object):

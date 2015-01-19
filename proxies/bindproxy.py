@@ -9,10 +9,9 @@ import json
 import os.path
 import sys
 from urlparse import urlparse
-
 from proxies.lru import LRUTimedCache, LRUClusterProtocolFactory, \
                         LRUClusterClient, make_cluster_func
-
+import proxies.patch
 from ldaptor import config
 from ldaptor.protocols import pureldap
 from ldaptor.protocols.ldap import proxybase, ldaperrors
@@ -117,9 +116,7 @@ def load_config(filename="bindproxy.cfg", instance_config=None):
     config_files = [system, user, local]
     if instance_config is not None:
         config_files.append(instance_config)
-    log.msg("[DEBUG] Trying to read configs: {0} ...".format(', '.join(config_files)))
     files_read = scp.read(config_files)
-    log.msg("[DEBUG] Actually read configs: {0} ...".format(', '.join(config_files)))
     assert len(files_read) > 0, "No config file found."
     return scp
 
@@ -259,29 +256,20 @@ class BindProxyService(service.Service):
         ep = serverFromString(reactor, endpoint)
         d = ep.listen(factory)
         d.addCallback(self.set_listening_port)
-        log.msg("[DEBUG] use_cluster: {0}".format(use_cluster))
         if use_cluster:
-            log.msg("[DEBUG] Using cluster mode.")
-            log.msg("[DEBUG] Cluster endpoint: {0}".format(cluster_endpoint))
             ep = serverFromString(reactor, cluster_endpoint)
             cache_map = {
                 'bind': factory.lastBindCache,
                 'search': factory.searchCache,}
             cluster_proto_factory = LRUClusterProtocolFactory(cache_map)
-            log.msg("[DEBUG] Schedule listening on cluster endpoint.")
             d = ep.listen(cluster_proto_factory)
-            log.msg("[DEBUG] Adding callback ...")
             d.addCallback(self.set_cluster_port)
-            log.msg("[DEBUG] Adding errback ...")
             d.addErrback(log.err)
-            log.msg("[DEBUG] All is scheduled.")
 
     def set_listening_port(self, port):
-        log.msg("[DEBUG] Listening on proxy port.")
         self._port = port
 
     def set_cluster_port(self, port):
-        log.msg("[DEBUG] Listening on cluster port.")
         self._cluster_port = port
         
     def stopService(self):
