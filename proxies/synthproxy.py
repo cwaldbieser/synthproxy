@@ -9,73 +9,18 @@ import json
 import os.path
 import sys
 from urlparse import urlparse
-
 import httpclient
+from proxies.lru import LRUTimedCache, LRUClusterProtocolFactory, \
+                        LRUClusterClient, make_cluster_func
 from ldaptor import config
 from ldaptor.protocols import pureldap
 from ldaptor.protocols.ldap import proxybase, ldaperrors
 import treq
+from twisted.application import service
 from twisted.internet import reactor, defer, ssl, protocol
 from twisted.internet.endpoints import serverFromString
 from twisted.python import log
 
-class LRUTimedCache(object):
-    """
-    Least recently used cache.
-    Entries are evicted if they are not referenced within a configurable
-    span of time.
-    """
-    def __init__(self, capacity=1000, reactor_=reactor, lifetime=240):
-        self.cache = collections.OrderedDict()
-        self.capacity = capacity
-        self.evictors = {}
-        self.reactor = reactor_
-        self.lifetime = lifetime
-
-    def get(self, key):
-        cache = self.cache
-        evictors = self.evictors
-        try:
-            value = cache.pop(key) 
-        except KeyError:
-            value = None
-        if value is not None:
-            cache[key] = value 
-        evictor = evictors.get(key, None)
-        if evictor is not None:
-            evictor.cancel()
-        evictor = self.reactor.callLater(self.lifetime, self._evict, key)
-        evictors[key] = evictor
-        return value
-
-    def store(self, key, value):
-        cache = self.cache   
-        try:
-            cache.pop(key)
-        except KeyError:
-            pass
-        cache[key] = value
-        evictors = self.evictors
-        evictor = evictors.get(key, None)
-        if evictor is not None:
-            evictor.cancel()
-        evictor = self.reactor.callLater(self.lifetime, self._evict, key)
-        evictors[key] = evictor
-        if len(cache) > self.capacity:
-            evicted_key = cache.popitem(last=False)
-            evictor = evictors.get(evicted_key, None)
-            if evictor is not None:
-                evictor.cancel()
-                del evictors[evicted_key]
-
-    def _evict(self, key):
-        del self.evictors[key]
-        cache = self.cache
-        if key in cache:
-            del cache[key]
-
-    def __str__(self):
-        return str(self.cache)
 
 class SynthProxy(proxybase.ProxyBase):
     """
@@ -232,7 +177,7 @@ class SynthProxy(proxybase.ProxyBase):
                 attribs[:] = temp
         return response
 
-def load_config(filename="synthproxy.cfg"):
+def load_config(filename="synthproxy.cfg", instance_config=None):
     """
     Load the proxy configuration.
     """
@@ -240,7 +185,10 @@ def load_config(filename="synthproxy.cfg"):
     system = os.path.join("/etc", filename)
     user = os.path.join(os.path.expanduser("~/"), ".{0}".format(filename))
     local = os.path.join(".", filename) 
-    files_read = scp.read([system, user, local])
+    config_files = [system, user, local]
+    if instance_config is not None:
+        config_files.append(instance_config)
+    files_read = scp.read(config_files)
     assert len(files_read) > 0, "No config file found."
     return scp
 
@@ -252,9 +200,17 @@ def validate_config(config):
         'CouchDB': frozenset(['url', 'user', 'passwd']),
         'LDAP': frozenset(['proxied_url',]),
         } 
+    def isValidClusterOption(opt):
+        if opt == "endpoint":
+            return True
+        if opt.startswith("peer"):
+            return True
+        return False
     optional = {
-        'Application': frozenset(['debug', 'port']),
-        'LDAP': frozenset(['proxy_cert', 'use_starttls']),
+        'Application': lambda x: x in frozenset([
+            'debug', 'endpoint', 'search_cache_lifetime', 'search_cache_size']),
+        'LDAP': lambda x: x in frozenset(['proxy_cert', 'use_starttls']),
+        'Cluster': isValidClusterOption
         }
     valid = True
     for section, options in required.iteritems():
@@ -266,6 +222,7 @@ def validate_config(config):
                 valid = False
                 log.msg("[ERROR] Missing required option '{0}:{1}'.".format(section, option))
     nullset = frozenset([])
+    falsetest = lambda x: False
     for section in config.sections():
         is_required = section in required 
         is_optional = section in optional
@@ -273,10 +230,10 @@ def validate_config(config):
             log.msg("[WARNING] Section '{0}' is not recognized.".format(section))
             continue
         required_options = required.get(section, nullset)
-        optional_options = optional.get(section, nullset)
+        optional_test = optional.get(section, falsetest)
         for option in config.options(section):
             is_required = option in required_options
-            is_optional = option in optional_options
+            is_optional = optional_test(option)
             if not (is_required or is_optional):
                 log.msg("[WARNING] Option '{0}:{1}' is not recognized.".format(section, option))
                 continue
@@ -296,54 +253,109 @@ def parse_url(url):
         port = 389
     return (p.scheme, host, port)
 
-def main():
-    """
-    LDAP Proxy; synthesizes group membership from external database.
-    """
-    log.startLogging(sys.stderr)
-    scp = load_config()
-    validate_config(scp)
-    if scp.has_option("Application", "port"):
-        port = scp.getint("Application", "port")
-    else:
-        port = 10389
-    db_url = scp.get("CouchDB", "url")
-    db_user = scp.get("CouchDB", "user")
-    db_passwd = scp.get("CouchDB", "passwd") 
-    proxied_scheme, proxied_host, proxied_port = parse_url(
-        scp.get("LDAP", "proxied_url"))
-    factory = protocol.ServerFactory()
-    if scp.has_option("LDAP", "proxy_cert"):
-        proxy_cert = scp.get("LDAP", "proxy_cert")
-        with open("ssl/proxy.pem", "r") as f:
-            certData = f.read()
-        cert = ssl.PrivateCertificate.loadPEM(certData)
-        factory.options = cert.options()
-    proxied = (proxied_host, proxied_port)
-    if proxied_scheme == 'ldaps':
-        log.msg("[ERROR] `ldaps` scheme is not supported.")
-        sys.exit(0)
-    use_tls = scp.getboolean('LDAP', 'use_starttls')
-    cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
-    debug_app = scp.getboolean('Application', 'debug')
-    def make_protocol():
-        proto = SynthProxy(cfg, use_tls=use_tls)
-        proto.debug = debug_app
-        proto.bind_dn = None
-        proto.membership_view_url = db_url
-        proto.db_user = db_user
-        proto.db_passwd = db_passwd
-        proto.http_client = httpclient
-        proto.searchResponses = {}
-        return proto
-    factory.protocol = make_protocol
-    factory.dbcache = {}
-    factory.searchCache = LRUTimedCache()
-    endpoint = serverFromString(reactor, "tcp:port={0}".format(port))
-    #endpoint = serverFromString(reactor, "ssl:port=10389:certKey=ssl/proxy.crt.pem:privateKey=ssl/proxy.key.pem")
-    endpoint.listen(factory)
-    reactor.run()
+class SynthProxyService(service.Service):
+    def __init__(self, instance_config=None, endpoint=None):
+        self._port = None
+        self._cluster_port = None
+        self.instance_config = instance_config
+        self.endpoint = endpoint
 
-if __name__ == '__main__':
-    main()
+    def startService(self):
+        #log.startLogging(sys.stderr)
+        scp = load_config(instance_config=self.instance_config)
+        validate_config(scp)
+        endpoint = self.endpoint
+        if endpoint is None:
+            if scp.has_option("Application", "endpoint"):
+                endpoint = scp.get("Application", "endpoint")
+            else:
+                endpoint = "tcp:10389"
+        db_url = scp.get("CouchDB", "url")
+        db_user = scp.get("CouchDB", "user")
+        db_passwd = scp.get("CouchDB", "passwd") 
+        proxied_scheme, proxied_host, proxied_port = parse_url(
+            scp.get("LDAP", "proxied_url"))
+        factory = protocol.ServerFactory()
+        if scp.has_option("LDAP", "proxy_cert"):
+            proxy_cert = scp.get("LDAP", "proxy_cert")
+            with open("ssl/proxy.pem", "r") as f:
+                certData = f.read()
+            cert = ssl.PrivateCertificate.loadPEM(certData)
+            factory.options = cert.options()
+        proxied = (proxied_host, proxied_port)
+        if proxied_scheme == 'ldaps':
+            log.msg("[ERROR] `ldaps` scheme is not supported.")
+            sys.exit(0)
+        use_tls = scp.getboolean('LDAP', 'use_starttls')
+        cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
+        debug_app = scp.getboolean('Application', 'debug')
+        if scp.has_option('Application', 'search_cache_lifetime'):
+            searchCacheLifetime = scp.getint('Application', 'search_cache_lifetime')
+        else:
+            searchCacheLifetime = 600
+        if scp.has_option('Application', 'search_cache_size'):
+            searchCacheSize = scp.getint('Application', 'search_cache_size')
+        else:
+            searchCacheSize = 2000
+        use_cluster = False
+        if scp.has_section("Cluster"):
+            cluster_endpoint = None
+            cluster_peers = []
+            if not scp.has_option("Cluster", "endpoint"):
+                log.msg("[ERROR] Section 'Cluster' does not define an 'endpoint' option.")
+                sys.exit(1)
+            cluster_endpoint = scp.get("Cluster", "endpoint")
+            options = scp.options("Cluster")
+            has_peer = False
+            for option in options:
+                if option.startswith("peer"):
+                    has_peer = True
+                    cluster_peers.append(scp.get("Cluster", option))
+            if not has_peer:
+                log.msg("[ERROR] Section 'Cluster' does not have any 'peerxxx' options.")
+                sys.exit(1)
+            use_cluster = True
+            clusterClient = LRUClusterClient(cluster_peers)
+        def make_protocol():
+            proto = SynthProxy(cfg, use_tls=use_tls)
+            proto.debug = debug_app
+            proto.bind_dn = None
+            proto.membership_view_url = db_url
+            proto.db_user = db_user
+            proto.db_passwd = db_passwd
+            proto.http_client = httpclient
+            proto.searchResponses = {}
+            return proto
+        factory.protocol = make_protocol
+        factory.dbcache = {}
+        kwds = {}
+        if use_cluster:
+            kwds['cluster_func'] = make_cluster_func('search', clusterClient)
+        factory.searchCache = LRUTimedCache(lifetime=searchCacheLifetime, capacity=searchCacheSize, **kwds)
+        kwds = {}
+        ep = serverFromString(reactor, endpoint)
+        d = ep.listen(factory)
+        d.addCallback(self.set_listening_port)
+        if use_cluster:
+            ep = serverFromString(reactor, cluster_endpoint)
+            cache_map = {
+                'search': factory.searchCache,}
+            cluster_proto_factory = LRUClusterProtocolFactory(cache_map)
+            d = ep.listen(cluster_proto_factory)
+            d.addCallback(self.set_cluster_port)
+            d.addErrback(log.err)
 
+    def set_listening_port(self, port):
+        self._port = port
+
+    def set_cluster_port(self, port):
+        self._cluster_port = port
+        
+    def stopService(self):
+        """
+        Stop the service.
+        """
+        if self._cluster_port is not None:
+            self._cluster_port.stopListening()
+        if self._port is not None:
+            return self._port.stopListening()
