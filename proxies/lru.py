@@ -9,13 +9,21 @@ from twisted.protocols.basic import NetstringReceiver
 from twisted.python import log
 
 class LRUClusterProtocol(NetstringReceiver):
+    debug = False
+
     def stringReceived(self, string):
+        debug = self.debug
         label, key, value = loads(string)
         cache_map = self.factory.cache_map
         cache = cache_map.get(label, None)
         if cache:
             if not cache.peek(key, value):
                 cache.store(key, value, from_remote=True)
+                if debug:
+                    log.msg("[DEBUG] Stored message from peer: ({0}:{1}:{2}).".format(
+                        label, key, value))
+        if debug and cache is None:
+            log.msg("[DEBUG] Unable to find cache for label '{0}'.".format(label))
 
 class LRUClusterProtocolFactory(Factory):
     protocol = LRUClusterProtocol
@@ -39,6 +47,7 @@ class LRUClusterClientProtocol(NetstringReceiver):
 
 class LRUClusterClient(object):
     retry_delay = 10
+    debug = False
 
     def __init__(self, peers, reactor_=reactor):
         self.reactor = reactor_
@@ -82,13 +91,21 @@ class LRUClusterClient(object):
         d.addErrback(self.failedToConnectToPeer, peer, failOK=failOK)
 
     def sendMessage(self, label, key, value):
+        debug = self.debug
         connections = self.connections
         for peer, proto in connections.iteritems():
             proto.sendMessage(label, key, value)
+            if debug:
+                log.msg("[DEBUG] Sent message ({0}:{1}:{2}) to peer {3}.".format(
+                    label, key, value, peer))
 
-def make_cluster_func(label, peer_manager):
+def make_cluster_func(label, peer_manager, debug=False):
     def cluster_func(key, value):
         peer_manager.sendMessage(label, key, value)
+        if debug:
+            log.msg("[DEBUG] Sending message ({0}:{1}:{2}) to peers ...".format(
+                label, key, value))
+            
     return cluster_func
 
 class LRUTimedCache(object):

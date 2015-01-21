@@ -208,7 +208,7 @@ def validate_config(config):
         return False
     optional = {
         'Application': lambda x: x in frozenset([
-            'debug', 'endpoint', 'search_cache_lifetime', 'search_cache_size']),
+            'debug', 'debug_cache', 'endpoint', 'search_cache_lifetime', 'search_cache_size']),
         'LDAP': lambda x: x in frozenset(['proxy_cert', 'use_starttls']),
         'Cluster': isValidClusterOption
         }
@@ -289,6 +289,7 @@ class SynthProxyService(service.Service):
         use_tls = scp.getboolean('LDAP', 'use_starttls')
         cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
         debug_app = scp.getboolean('Application', 'debug')
+        debug_cache = scp.getboolean('Application', 'debug_cache')
         if scp.has_option('Application', 'search_cache_lifetime'):
             searchCacheLifetime = scp.getint('Application', 'search_cache_lifetime')
         else:
@@ -316,6 +317,7 @@ class SynthProxyService(service.Service):
                 sys.exit(1)
             use_cluster = True
             clusterClient = LRUClusterClient(cluster_peers)
+            clusterClient.debug = debug_cache
         def make_protocol():
             proto = SynthProxy(cfg, use_tls=use_tls)
             proto.debug = debug_app
@@ -330,9 +332,8 @@ class SynthProxyService(service.Service):
         factory.dbcache = {}
         kwds = {}
         if use_cluster:
-            kwds['cluster_func'] = make_cluster_func('search', clusterClient)
+            kwds['cluster_func'] = make_cluster_func('search', clusterClient, debug=debug_cache)
         factory.searchCache = LRUTimedCache(lifetime=searchCacheLifetime, capacity=searchCacheSize, **kwds)
-        kwds = {}
         ep = serverFromString(reactor, endpoint)
         d = ep.listen(factory)
         d.addCallback(self.set_listening_port)
@@ -341,6 +342,7 @@ class SynthProxyService(service.Service):
             cache_map = {
                 'search': factory.searchCache,}
             cluster_proto_factory = LRUClusterProtocolFactory(cache_map)
+            cluster_proto_factory.protocol.debug = debug_cache
             d = ep.listen(cluster_proto_factory)
             d.addCallback(self.set_cluster_port)
             d.addErrback(log.err)
