@@ -12,6 +12,7 @@ from urlparse import urlparse
 import httpclient
 from proxies.lru import LRUTimedCache, LRUClusterProtocolFactory, \
                         LRUClusterClient, make_cluster_func
+import proxies.patch
 from ldaptor import config
 from ldaptor.protocols import pureldap
 from ldaptor.protocols.ldap import proxybase, ldaperrors
@@ -310,8 +311,14 @@ class SynthProxyService(service.Service):
             sys.exit(0)
         use_tls = scp.getboolean('LDAP', 'use_starttls')
         cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
-        debug_app = scp.getboolean('Application', 'debug')
-        debug_cache = scp.getboolean('Application', 'debug_cache')
+        if scp.has_option('Application', 'debug'):
+            debug_app = scp.getboolean('Application', 'debug')
+        else:
+            debug_app = False
+        if scp.has_option('Application', 'debug_cache'):
+            debug_cache = scp.getboolean('Application', 'debug_cache')
+        else:
+            debug_cache = False
         if scp.has_option('Application', 'search_cache_lifetime'):
             searchCacheLifetime = scp.getint('Application', 'search_cache_lifetime')
         else:

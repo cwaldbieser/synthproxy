@@ -210,7 +210,10 @@ class BindProxyService(service.Service):
             sys.exit(0)
         use_tls = scp.getboolean('LDAP', 'use_starttls')
         cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
-        debug_app = scp.getboolean('Application', 'debug')
+        if scp.has_option('Application', 'debug'):
+            debug_app = scp.getboolean('Application', 'debug')
+        else:
+            debug_app = False
         if scp.has_option('Application', 'bind_cache_lifetime'):
             bindCacheLifetime = scp.getint('Application', 'bind_cache_lifetime')
         else:
