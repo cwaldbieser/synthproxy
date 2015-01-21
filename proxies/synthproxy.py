@@ -21,6 +21,10 @@ from twisted.internet import reactor, defer, ssl, protocol
 from twisted.internet.endpoints import serverFromString
 from twisted.python import log
 
+def send_result(result, d2):
+    d2.callback(result)
+    return result
+
 
 class SynthProxy(proxybase.ProxyBase):
     """
@@ -62,20 +66,38 @@ class SynthProxy(proxybase.ProxyBase):
             self.bind_dn = request.dn 
         elif isinstance(response, pureldap.LDAPSearchResultEntry):
             responses = searchResponses.setdefault(id(request), [])
-            responses.append(response)
             attributes = frozenset(request.attributes)
             all_attributes = len(attributes) == 0
             if all_attributes or 'memberOf' in attributes or 'member' in attributes:
                 dn = response.objectName.lower() 
                 d = self._getAuxilliaryAttributes(dn, response)
                 d.addCallback(self._receivedAuxilliaryAttributes, response, request, controls, attributes)
+                d2 = defer.Deferred()
+                d.addCallback(send_result, d2)
+            responses.append(d2)
         elif isinstance(response, pureldap.LDAPSearchResultDone):
-            searchCache = self.factory.searchCache
             key = id(request)
-            searchCache.store((self.bind_dn, repr(request)), searchResponses.get(key))
-            if key in searchResponses:
-                del searchResponses[key]
+            dl = defer.DeferredList(searchResponses.get(key))
+            dl.addCallback(self._cacheSearchResponses, (self.bind_dn, repr(request))) 
         return d
+
+    def _cacheSearchResponses(self, responses, key):
+        debug = self.debug
+        searchCache = self.factory.searchCache
+        temp = []
+        for success, result in responses:
+            if not success:
+                log.msg("[ERROR] Failed to get all responses for search {0}.".format(key))
+                return
+            temp.append(result)
+        responses = temp
+        del temp
+        searchCache.store(key, responses)
+        searchResponses = self.searchResponses
+        if key in searchResponses:
+            del searchResponses[key]
+        if debug:
+            log.msg("[DEBUG] Cached search responses for key {0}.".format(key))
 
     def _getAuxilliaryAttributes(self, dn, response):
         """
