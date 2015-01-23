@@ -9,5 +9,6 @@ if [ -z "$N" ]; then
     exit 1
 fi
 pushd "$THISDIR" > /dev/null
-twistd -n --pidfile "twsitd-${N}.pid" bindproxy -c "./bindproxy-${N}.cfg"
+shift
+twistd -n --pidfile "twsitd-${N}.pid" bindproxy -c "./bindproxy-${N}.cfg" $@
 popd > /dev/null

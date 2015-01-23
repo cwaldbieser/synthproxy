@@ -155,14 +155,16 @@ class LRUTimedCache(object):
             cache.pop(key)
         except KeyError:
             pass
-        cache[key] = value
+        if value is not None:
+            cache[key] = value
         cluster_func = self.cluster_func
         evictors = self.evictors
         evictor = evictors.get(key, None)
         if evictor is not None:
             evictor.cancel()
-        evictor = self.reactor.callLater(self.lifetime, self._evict, key)
-        evictors[key] = evictor
+        if value is not None:
+            evictor = self.reactor.callLater(self.lifetime, self._evict, key)
+            evictors[key] = evictor
         if len(cache) > self.capacity:
             evicted_key = cache.popitem(last=False)
             evictor = evictors.get(evicted_key, None)

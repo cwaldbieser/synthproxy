@@ -1,4 +1,3 @@
-#! /usr/bin/env python
 
 from __future__ import print_function
 
@@ -9,6 +8,7 @@ import json
 import os.path
 import sys
 from urlparse import urlparse
+from bindproxyws import make_ws
 from proxies.lru import LRUTimedCache, LRUClusterProtocolFactory, \
                         LRUClusterClient, make_cluster_func
 import proxies.patch
@@ -136,7 +136,8 @@ def validate_config(config):
     optional = {
         'Application': lambda x: x in frozenset(['debug', 'endpoint', 'bind_cache_lifetime', 'bind_cache_size']),
         'LDAP': lambda x: x in frozenset(['proxy_cert', 'use_starttls']),
-        'Cluster': isValidClusterOption
+        'Cluster': isValidClusterOption,
+        'WebService': lambda x: x in frozenset(['endpoint'])
         }
     valid = True
     for section, options in required.iteritems():
@@ -179,11 +180,11 @@ def parse_url(url):
     return (p.scheme, host, port)
 
 class BindProxyService(service.Service):
-    def __init__(self, instance_config=None, endpoint=None):
-        self._port = None
-        self._cluster_port = None
+    def __init__(self, instance_config=None, endpoint=None, portal=None):
+        self._ports = {}
         self.instance_config = instance_config
         self.endpoint = endpoint
+        self.portal = portal
 
     def startService(self):
         #log.startLogging(sys.stderr)
@@ -258,7 +259,7 @@ class BindProxyService(service.Service):
         factory.searchCache = LRUTimedCache(**kwds)
         ep = serverFromString(reactor, endpoint)
         d = ep.listen(factory)
-        d.addCallback(self.set_listening_port)
+        d.addCallback(self.set_listening_port, port_type='ldap')
         if use_cluster:
             ep = serverFromString(reactor, cluster_endpoint)
             cache_map = {
@@ -266,22 +267,24 @@ class BindProxyService(service.Service):
                 'search': factory.searchCache,}
             cluster_proto_factory = LRUClusterProtocolFactory(cache_map)
             d = ep.listen(cluster_proto_factory)
-            d.addCallback(self.set_cluster_port)
+            d.addCallback(self.set_listening_port, port_type='cluster')
             d.addErrback(log.err)
+        if scp.has_section("WebService") and scp.has_option("WebService", "endpoint"):
+            endpoint = scp.get("WebService", "endpoint")
+            ws_site = make_ws(bindCache=factory.lastBindCache, portal=self.portal)
+            ep = serverFromString(reactor, endpoint)
+            d = ep.listen(ws_site)
+            d.addCallback(self.set_listening_port, port_type='ws')
 
-    def set_listening_port(self, port):
-        self._port = port
+    def set_listening_port(self, port, port_type):
+        self._ports[port_type] = port
 
-    def set_cluster_port(self, port):
-        self._cluster_port = port
-        
     def stopService(self):
         """
         Stop the service.
         """
-        if self._cluster_port is not None:
-            self._cluster_port.stopListening()
-        if self._port is not None:
-            return self._port.stopListening()
-
+        rval = True
+        for port_type, port in self._ports.iteritems():
+            rval = (rval and port.stopListening())
+        return rval
 

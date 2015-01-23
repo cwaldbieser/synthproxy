@@ -1,18 +1,25 @@
 
 # Standard library
 import sys
-
 # Application modules
 from proxies.bindproxy import BindProxyService
-
+from proxies.bindproxyws import IBindProxyWSUser, BindProxyWSRealm
 # External modules
 from twisted.application import internet
 from twisted.application.service import IServiceMaker
+from twisted.cred import credentials, portal, strcred
+from twisted.internet import defer
 from twisted.plugin import getPlugins, IPlugin
 from twisted.python import usage
 from zope.interface import implements
 
-class Options(usage.Options):
+def noop():
+    pass
+
+
+class Options(usage.Options, strcred.AuthOptionMixin):
+    supportedInterfaces = (credentials.IUsernamePassword,)
+
     optFlags = [
             ["xyzzy", "x", "Magic flag"],
         ]
@@ -37,9 +44,14 @@ class MyServiceMaker(object):
         """
         endpoint_str = options['endpoint']
         instance_config = options['instance-config']
-
+        realm = BindProxyWSRealm()
+        checkers = options.get("credCheckers", None)
+        if checkers is not None:
+            prtl = portal.Portal(realm, checkers)
+        else:
+            prtl = None
         # Create the service.
-        return BindProxyService(endpoint=endpoint_str, instance_config=instance_config)
+        return BindProxyService(endpoint=endpoint_str, instance_config=instance_config, portal=prtl)
 
 
 # Now construct an object which *provides* the relevant interfaces
