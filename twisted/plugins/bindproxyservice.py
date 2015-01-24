@@ -13,9 +13,6 @@ from twisted.plugin import getPlugins, IPlugin
 from twisted.python import usage
 from zope.interface import implements
 
-def noop():
-    pass
-
 
 class Options(usage.Options, strcred.AuthOptionMixin):
     supportedInterfaces = (credentials.IUsernamePassword,)

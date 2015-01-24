@@ -162,6 +162,8 @@ class LRUTimedCache(object):
         evictor = evictors.get(key, None)
         if evictor is not None:
             evictor.cancel()
+            if value is None:
+                del evictors[key]
         if value is not None:
             evictor = self.reactor.callLater(self.lifetime, self._evict, key)
             evictors[key] = evictor

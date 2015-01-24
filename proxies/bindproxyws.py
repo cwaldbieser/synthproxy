@@ -16,6 +16,9 @@ from twisted.web.server import Site
 import werkzeug.exceptions
 from zope.interface import Interface, Attribute, implements
 
+def noop():
+    pass
+
 def decode_basic_auth(request):
     """
     Decodes basic auth info and returns (user, passwd) or None.
@@ -46,15 +49,14 @@ class BindProxyWSRealm(object):
     implements(IRealm)
 
     def requestAvatar(avatarId, mind, *interfaces):
-        if len(interfaces) != 1 or (not IBindProxyWSUser in interfaces):
-            log.msg("[DEBUG] len(interfaces): {0}".format(len(interfaces)))
-            log.msg("[DEBUG] {0}".format(IBindProxyWSUser not in interfaces))
-            log.msg("[DEBUG] interfaces: {0}".format(interfaces))
+        if not IBindProxyWSUser in interfaces:
+            log.msg(interfaces)
+            log.msg(IBindProxyWSUser in interfaces)
             return defer.fail(NotImplementedError("This realm only implements IBindProxyWSUser."))
         else:
             avatar = BindProxyWSUser()
             avatar.username = avatarId
-            return defer.succeed((credentials.IUsernamePassword, avatar, noop))
+            return defer.succeed((IBindProxyWSUser, avatar, noop))
 
 
 class BindProxyWebService(object):
@@ -74,11 +76,15 @@ class BindProxyWebService(object):
             request.setHeader("WWW-Authenticate", 'Basic realm="BindProxyWS"')
             returnValue("""{"result": "not authorized"}""")
         try:
-            iface, avatar, logout = yield self.portal.login(UsernamePassword(*result), None, [IBindProxyWSUser])
+            iface, avatar, logout = yield self.portal.login(UsernamePassword(*result), None, IBindProxyWSUser)
         except (error.UnauthorizedLogin, exceptions.NotImplementedError) as ex:
             log.msg("[ERROR] Unauthorized login attempt to web service.\n{0}".format(str(ex)))
             request.setResponseCode(UNAUTHORIZED)
             returnValue("""{"result": "not authorized"}""")
+        except Exception as ex:
+            log.msg("[ERROR] {0}".format(str(ex)))
+            request.setResponseCode(500)
+            returnValue('''{"result": "error"}''')
         self.bindCache.store(dn, None)
         returnValue('''{"result": "ok"}''')
 
