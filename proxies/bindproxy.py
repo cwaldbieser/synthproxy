@@ -134,7 +134,14 @@ def validate_config(config):
             return True
         return False
     optional = {
-        'Application': lambda x: x in frozenset(['debug', 'endpoint', 'bind_cache_lifetime', 'bind_cache_size']),
+        'Application': lambda x: x in frozenset([
+            'debug',
+            'debug_cache', 
+            'endpoint', 
+            'bind_cache_lifetime', 
+            'bind_cache_size',
+            'search_cache_lifetime',
+            'search_cache_size']),
         'LDAP': lambda x: x in frozenset(['proxy_cert', 'use_starttls']),
         'Cluster': isValidClusterOption,
         'WebService': lambda x: x in frozenset(['endpoint'])
@@ -215,6 +222,18 @@ class BindProxyService(service.Service):
             debug_app = scp.getboolean('Application', 'debug')
         else:
             debug_app = False
+        if scp.has_option('Application', 'debug_cache'):
+            debug_cache = scp.getboolean('Application', 'debug_cache')
+        else:
+            debug_cache = False
+        if scp.has_option('Application', 'search_cache_lifetime'):
+            searchCacheLifetime = scp.getint('Application', 'search_cache_lifetime')
+        else:
+            searchCacheLifetime = 600
+        if scp.has_option('Application', 'search_cache_size'):
+            searchCacheSize = scp.getint('Application', 'search_cache_size')
+        else:
+            searchCacheSize = 2000
         if scp.has_option('Application', 'bind_cache_lifetime'):
             bindCacheLifetime = scp.getint('Application', 'bind_cache_lifetime')
         else:
@@ -242,6 +261,7 @@ class BindProxyService(service.Service):
                 sys.exit(1)
             use_cluster = True
             clusterClient = LRUClusterClient(cluster_peers)
+            clusterClient.debug = debug_cache
         def make_protocol():
             proto = BindProxy(cfg, use_tls=use_tls)
             proto.debug = debug_app
@@ -251,12 +271,12 @@ class BindProxyService(service.Service):
         factory.protocol = make_protocol
         kwds = {}
         if use_cluster:
-            kwds['cluster_func'] = make_cluster_func('bind', clusterClient)
+            kwds['cluster_func'] = make_cluster_func('bind', clusterClient, debug=debug_cache)
         factory.lastBindCache = LRUTimedCache(lifetime=bindCacheLifetime, capacity=bindCacheSize, **kwds)
         kwds = {}
         if use_cluster:
-            kwds['cluster_func'] = make_cluster_func('string', clusterClient)
-        factory.searchCache = LRUTimedCache(**kwds)
+            kwds['cluster_func'] = make_cluster_func('search', clusterClient, debug=debug_cache)
+        factory.searchCache = LRUTimedCache(lifetime=searchCacheLifetime, capacity=searchCacheSize, **kwds)
         ep = serverFromString(reactor, endpoint)
         d = ep.listen(factory)
         d.addCallback(self.set_listening_port, port_type='ldap')
@@ -266,6 +286,7 @@ class BindProxyService(service.Service):
                 'bind': factory.lastBindCache,
                 'search': factory.searchCache,}
             cluster_proto_factory = LRUClusterProtocolFactory(cache_map)
+            cluster_proto_factory.protocol.debug = debug_cache
             d = ep.listen(cluster_proto_factory)
             d.addCallback(self.set_listening_port, port_type='cluster')
             d.addErrback(log.err)
