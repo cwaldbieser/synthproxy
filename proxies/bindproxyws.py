@@ -70,15 +70,20 @@ class BindProxyWebService(object):
     @inlineCallbacks
     def cache_DELETE(self, request, dn):
         request.setHeader("Content-Type", "application/json")
+        client_ip = request.getClientIP()
         result = decode_basic_auth(request)
         if result is None:
             request.setResponseCode(UNAUTHORIZED)
             request.setHeader("WWW-Authenticate", 'Basic realm="BindProxyWS"')
             returnValue("""{"result": "not authorized"}""")
+        user, passwd = result
         try:
             iface, avatar, logout = yield self.portal.login(UsernamePassword(*result), None, IBindProxyWSUser)
         except (error.UnauthorizedLogin, exceptions.NotImplementedError) as ex:
-            log.msg("[ERROR] Unauthorized login attempt to web service.\n{0}".format(str(ex)))
+            log.msg((
+                    "[ERROR] client_ip={client_ip}, login={login}: "
+                    "Unauthorized login attempt to web service.\n{err}").format(
+                client_ip=client_ip, login=user, err=str(ex)))
             request.setResponseCode(UNAUTHORIZED)
             returnValue("""{"result": "not authorized"}""")
         except Exception as ex:
@@ -86,13 +91,26 @@ class BindProxyWebService(object):
             request.setResponseCode(500)
             returnValue('''{"result": "error"}''')
         self.bindCache.store(dn, None)
+        log.msg((
+                "[INFO] client_ip={client_ip}, login={login}: "
+                "Successfully removed cached entry for {dn}").format(
+                    client_ip=client_ip, login=user, dn=dn))
         returnValue('''{"result": "ok"}''')
 
     @app.handle_errors(werkzeug.exceptions.NotFound)
-    def error_handler(self, request, failure):
-        log.msg("[ERROR] 404 => {0}".format(request.path))
+    def error_handler_404(self, request, failure):
+        log.msg("[ERROR] http_status=404, client_ip={client_ip}: {err}".format(
+            client_ip=request.getClientIP(), err=str(failure)))
         request.setResponseCode(404)
         return '''{"result": "not found"}'''
+
+    @app.handle_errors
+    def error_handler_500(self, request, failure):
+        request.setResponseCode(500)
+        log.msg("[ERROR] http_status=500, client_ip={client_ip}: {err}".format(
+            client_ip=request.getClientIP(), err=str(failure)))
+        return '''{"result": "error"}'''
+        
              
 def make_ws(bindCache, portal):
     """

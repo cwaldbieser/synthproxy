@@ -293,6 +293,7 @@ class BindProxyService(service.Service):
         if scp.has_section("WebService") and scp.has_option("WebService", "endpoint"):
             endpoint = scp.get("WebService", "endpoint")
             ws_site = make_ws(bindCache=factory.lastBindCache, portal=self.portal)
+            ws_site.displayTracebacks = debug_cache
             ep = serverFromString(reactor, endpoint)
             d = ep.listen(ws_site)
             d.addCallback(self.set_listening_port, port_type='ws')
