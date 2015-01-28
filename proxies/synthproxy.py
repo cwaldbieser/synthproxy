@@ -78,7 +78,11 @@ class SynthProxy(proxybase.ProxyBase):
             responses.append(d2)
         elif isinstance(response, pureldap.LDAPSearchResultDone):
             key = id(request)
-            dl = defer.DeferredList(searchResponses.get(key))
+            responseEntries = searchResponses.get(key)
+            if responseEntries is not None and len(responseEntries) > 0:
+                dl = defer.DeferredList(responseEntries)
+            else:
+                dl = defer.succeed([])
             dl.addCallback(self._cacheSearchResponses, (self.bind_dn, repr(request))) 
         return d
 
