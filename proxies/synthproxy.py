@@ -115,7 +115,7 @@ class SynthProxy(proxybase.ProxyBase):
             d0 = self.http_client.get(
                 self.membership_view_url, 
                 auth=(self.db_user, self.db_passwd), 
-                params=dict(key=json.dumps(dn)))
+                params=dict(startkey=json.dumps([dn]), endkey=json.dumps([dn, {}, {}])))
             d0.addCallback(treq.json_content)
             d0.addCallback(self._scheduleExpireCache, dn)
             pending = []
