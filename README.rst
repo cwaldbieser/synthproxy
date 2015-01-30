@@ -2,6 +2,17 @@
 LDAP Proxy Servers
 ##################
 
+* *bindproxy*: An LDAP proxy server that records the last **failed** BIND
+  for a DN.  If the same invalid credential is provided, a failure response
+  is returned to the client without consulting the proxied server.  This
+  helps prevent accounts from getting locked out by a password policy when
+  a misconfigured client (e.g. smart phone email client) rapidly presents
+  the **same** wong credentials multiple times.
+* *synthproxy*: An LDAP proxy server that examines search result DNs returned
+  from the proxied server and merges attributes from an external CouchDB
+  database into the result.  This allows multi-valued attributes like
+  `memberOf` to be manipulated independently.
+
 --------
 Clusters
 --------
@@ -20,7 +31,7 @@ states amongst each other.
 To run a cluster of proxy daemons, create one config file for each node.
 This config file will inherit from the usual places (system, user, local
 configs).  It should specify the endpoint for the LRU cluster service and
-the endpoint for each peer.  For example (:file:`bindproxy-0.cfg`)::
+the endpoint for each peer.  For example (`bindproxy-0.cfg`)::
 
     [Application]
     endpoint = tcp:10390
@@ -30,8 +41,8 @@ the endpoint for each peer.  For example (:file:`bindproxy-0.cfg`)::
     peer0 = unix:path=/tmp/bindproxy/bp1.sock
 
 If your config files follow this naming convention, you can use the shell script
-:program:`bpcluster.sh` to run :program:`twistd bindproxy` with the appropriate 
-arguments for each node.  The :program:`synthcluster.sh` works identically for
+:program:`bpcluster.sh` to run `twistd bindproxy` with the appropriate 
+arguments for each node.  The `synthcluster.sh` works identically for
 the `synthproxy` subcommand.  When a node starts up, it will try to connect to its 
 peers.  It will retry at intervals until the peer connections have been 
 established.
@@ -54,8 +65,8 @@ being repeatedly presented (e.g. by a misconfigured mail client).
 The bindproxy has an optional web service that can be used to clear cached BIND
 results for a DN.  The `[WebService]` section, `endpoint` option controls where
 this service listens.  Authentication can be configured via the command line
-by passing an :option:`--auth` option to :program:`twistd` or 
-:program:`bpcluster.sh` or :program:`synthcluster.sh`.  The only valid web service
+by passing an `--auth` option to `twistd` or 
+`bpcluster.sh` or `synthcluster.sh`.  The only valid web service
 URL is:
 
   DELETE http://$HOST[:$PORT]/cache/$DN
@@ -75,7 +86,7 @@ To run as a daemon::
 
     $ twisted bindproxy
 
-Additional options can be found by adding the :option:`--help` option.
+Additional options can be found by adding the `--help` option.
 
 ----------
 SynthProxy
@@ -99,5 +110,5 @@ To run as a daemon::
 
     $ twisted synthproxy
 
-Additional options can be found by adding the :option:`--help` option.
+Additional options can be found by adding the `--help` option.
 
