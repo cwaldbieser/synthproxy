@@ -22,8 +22,8 @@ from twisted.internet import reactor, defer, ssl, protocol
 from twisted.internet.endpoints import serverFromString
 from twisted.python import log
 
-def send_result(result, d2):
-    d2.callback(result)
+def sendResult(result, d):
+    d.callback(result)
     return result
 
 
@@ -68,13 +68,13 @@ class SynthProxy(proxybase.ProxyBase):
         elif isinstance(response, pureldap.LDAPSearchResultEntry):
             responses = searchResponses.setdefault(id(request), [])
             attributes = frozenset(request.attributes)
-            all_attributes = len(attributes) == 0
-            if all_attributes or 'memberOf' in attributes or 'member' in attributes:
+            typesOnly = request.typesOnly
+            if not typesOnly:
                 dn = response.objectName.lower() 
                 d = self._getAuxilliaryAttributes(dn, response)
                 d.addCallback(self._receivedAuxilliaryAttributes, response, request, controls, attributes)
-                d2 = defer.Deferred()
-                d.addCallback(send_result, d2)
+            d2 = defer.Deferred()
+            d.addCallback(sendResult, d2)
             responses.append(d2)
         elif isinstance(response, pureldap.LDAPSearchResultDone):
             key = id(request)
@@ -112,6 +112,8 @@ class SynthProxy(proxybase.ProxyBase):
         cache = self.factory.dbcache
         entry = cache.get(dn)
         if entry is None:
+            if self.debug:
+                log.msg("[DEBUG] Attempting to retrieve aux attributes for DN {0}.".format(dn))
             d0 = self.http_client.get(
                 self.membership_view_url, 
                 auth=(self.db_user, self.db_passwd), 
@@ -127,11 +129,13 @@ class SynthProxy(proxybase.ProxyBase):
         else:
             kind, cached = entry
             if kind == 'pending':
+                if self.debug:
+                    log.msg("[DEBUG] Waiting on pending attribute fetch for DN {0}.".format(dn))
                 d = defer.Deferred()
                 cached.append(d)
             elif kind == 'result':
                 if self.debug:
-                    log.msg("[DEBUG] Aux. attributes are already in the cache.")
+                    log.msg("[DEBUG] Aux. attributes are already in the cache for DN {0}.".format(dn))
                 d = defer.succeed(cached)
         return d
 
