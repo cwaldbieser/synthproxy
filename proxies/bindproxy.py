@@ -9,6 +9,7 @@ import os.path
 import sys
 from urlparse import urlparse
 from bindproxyws import make_ws
+from configutils import MultiLocationLDAPConfig
 from proxies.lru import LRUTimedCache, LRUClusterProtocolFactory, \
                         LRUClusterClient, make_cluster_func
 import proxies.patch
@@ -125,14 +126,22 @@ def validate_config(config):
     Validate the configuration.
     """
     required = {
-        'LDAP': frozenset(['proxied_url',]),
         } 
+
     def isValidClusterOption(opt):
         if opt == "endpoint":
             return True
         if opt.startswith("peer"):
             return True
         return False
+
+    def isValidLDAPOption(opt):
+        if opt in ['proxy_cert', 'use_starttls']:
+            return True
+        if opt.startswith("proxied_url"):
+            return True
+        return False
+
     optional = {
         'Application': lambda x: x in frozenset([
             'debug',
@@ -142,7 +151,7 @@ def validate_config(config):
             'bind_cache_size',
             'search_cache_lifetime',
             'search_cache_size']),
-        'LDAP': lambda x: x in frozenset(['proxy_cert', 'use_starttls']),
+        'LDAP': isValidLDAPOption,
         'Cluster': isValidClusterOption,
         'WebService': lambda x: x in frozenset(['endpoint'])
         }
@@ -203,8 +212,6 @@ class BindProxyService(service.Service):
                 endpoint = scp.get("Application", "endpoint")
             else:
                 endpoint = "tcp:10389"
-        proxied_scheme, proxied_host, proxied_port = parse_url(
-            scp.get("LDAP", "proxied_url"))
         factory = protocol.ServerFactory()
         if scp.has_option("LDAP", "proxy_cert"):
             proxy_cert = scp.get("LDAP", "proxy_cert")
@@ -212,12 +219,33 @@ class BindProxyService(service.Service):
                 certData = f.read()
             cert = ssl.PrivateCertificate.loadPEM(certData)
             factory.options = cert.options()
-        proxied = (proxied_host, proxied_port)
+        proxied_locations = []
+        last_proxied_scheme = None
+        for opt in scp.options("LDAP"):
+            if opt.startswith("proxied_url"):
+                proxied_scheme, proxied_host, proxied_port = parse_url(
+                    scp.get("LDAP", opt))
+                if last_proxied_scheme is None:
+                    last_proxied_scheme = proxied_scheme
+                elif proxied_scheme != last_proxied_scheme:
+                    log.msg(
+                        "[ERROR] Mixed LDAP schemes ('{0}' and '{1}') are not implemented.".format(
+                            last_proxied_scheme, proxied_scheme))
+                    sys.exit(1)
+                proxied_locations.append((proxied_host, proxied_port))
+        if len(proxied_locations) == 0:
+            log.msg("[ERROR] No proxied locations specified.")
+        elif len(proxied_locations) == 1:
+            proxied = proxied_locations[0]
+            slo = {'': proxied, }
+            cfg = config.LDAPConfig(serviceLocationOverrides=slo)
+        else:
+            slo = {'': proxied_locations}
+            cfg = MultiLocationLDAPConfig(serviceLocationOverrides=slo)
         if proxied_scheme == 'ldaps':
             log.msg("[ERROR] `ldaps` scheme is not supported.")
             sys.exit(0)
         use_tls = scp.getboolean('LDAP', 'use_starttls')
-        cfg = config.LDAPConfig(serviceLocationOverrides={'': proxied, })
         if scp.has_option('Application', 'debug'):
             debug_app = scp.getboolean('Application', 'debug')
         else:
