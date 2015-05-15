@@ -1,5 +1,5 @@
 Twisted==14.0.2
--e git+git@github.com:cwaldbieser/ldaptor.git@568c275863f2b605b764ded09452d5f39247a0a6#egg=ldaptor-dev
+-e git+https://github.com/cwaldbieser/ldaptor.git@d8465d7803fc7904c07d688b9f7d14ad1cf09b29#egg=ldaptor-master
 pyOpenSSL==0.13.1
 pyasn1==0.1.7
 pyasn1-modules==0.0.5
