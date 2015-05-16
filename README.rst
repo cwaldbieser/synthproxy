@@ -52,6 +52,30 @@ When a node caches a result, it communicates the cached results to its peers.
 The `twistd balancer` command may be used to create a simple TCP load balancer
 in front of the cluster.
 
+---
+TLS
+---
+
+The LDAP proxies can be configured to communicate with the proxied host(s) 
+using TLS.  Set the `LDAP` -> `use_starttls` option to 1.
+
+The Proxy itself can be conigured to respond to a request to initiate a StartTLS 
+session with clients.  The `LDAP` -> `proxy_cert` option must be set to the path
+of a file containing a PEM formatted certificate or certificate chain followed by
+a corresponding PEM formatted private key.  If this option is present and the
+client issues a StartTLS request, the proxy server will respond and establish
+a TLS session.  If this option is not present, the proxy server will respond with
+an error code indicating that StartTLS is not available.
+
+----------------------
+Multiple Proxied Hosts
+----------------------
+Multiple LDAP hosts can be proxied.  Provide a unique option under the `LDAP`
+section for each service.  The option must start with 'proxied_url'.  E.g.
+'proxied_url_1 = ldap://first.example.org:389' and 
+'proxied_url_2 = ldap://second.example.org:389'.  The host will be queried in 
+a round-robin fashion.
+
 ---------
 BindProxy
 ---------
