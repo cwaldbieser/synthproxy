@@ -215,7 +215,7 @@ class BindProxyService(service.Service):
         factory = protocol.ServerFactory()
         if scp.has_option("LDAP", "proxy_cert"):
             proxy_cert = scp.get("LDAP", "proxy_cert")
-            with open("ssl/proxy.pem", "r") as f:
+            with open(proxy_cert, "r") as f:
                 certData = f.read()
             cert = ssl.PrivateCertificate.loadPEM(certData)
             factory.options = cert.options()
