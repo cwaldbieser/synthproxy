@@ -3,19 +3,20 @@ from __future__ import print_function
 
 import copy
 from ConfigParser import SafeConfigParser
+from functools import partial
 import hashlib
 import json
 import os.path
 import sys
-from urlparse import urlparse
 from bindproxyws import make_ws
-from configutils import MultiLocationLDAPConfig
-from proxies.lru import LRUTimedCache, LRUClusterProtocolFactory, \
-                        LRUClusterClient, make_cluster_func
+from proxies.lru import (
+    LRUTimedCache, LRUClusterProtocolFactory, 
+    LRUClusterClient, make_cluster_func)
 import proxies.patch
-from ldaptor import config
 from ldaptor.protocols import pureldap
 from ldaptor.protocols.ldap import proxybase, ldaperrors
+from ldaptor.protocols.ldap.ldapclient import LDAPClient
+from ldaptor.protocols.ldap.ldapconnector import connectToLDAPEndpoint
 from twisted.internet import reactor, defer, ssl, protocol
 from twisted.internet.endpoints import serverFromString
 from twisted.python import log
@@ -28,6 +29,8 @@ class BindProxy(proxybase.ProxyBase):
     password and responds with a failure immediately instead of passing
     the credentials on to the proxied service.
     """
+    bind_dn = None
+
     def handleBeforeForwardRequest(self, request, controls, reply):
         """
         Override to modify request and/or controls forwarded on to the proxied server.
@@ -138,7 +141,7 @@ def validate_config(config):
     def isValidLDAPOption(opt):
         if opt in ['proxy_cert', 'use_starttls']:
             return True
-        if opt.startswith("proxied_url"):
+        if opt.startswith("proxied_endpoint"):
             return True
         return False
 
@@ -182,18 +185,24 @@ def validate_config(config):
     if not valid:
         sys.exit(1)
 
-def parse_url(url):
-    """
-    Return (scheme, host, port).
-    """
-    p = urlparse(url)
-    parts = p.netloc.split(":", 1)
-    host = parts[0]
-    if len(parts) > 1:
-        port = int(parts[1])
+def makeClientConnector(reactor, proxied_endpoints):
+    connectors = [
+        partial(
+            connectToLDAPEndpoint, 
+            reactor, 
+            endpoint_str, 
+            LDAPClient) for endpoint_str in proxied_endpoints]
+    if len(connectors) == 1:
+        clientConnector = connectors[0]
     else:
-        port = 389
-    return (p.scheme, host, port)
+
+        def clientConnector():
+            c = connectors.pop(0)
+            connectors.append(c)
+            return c()
+
+    return clientConnector
+
 
 class BindProxyService(service.Service):
     def __init__(self, instance_config=None, endpoint=None, portal=None):
@@ -203,7 +212,6 @@ class BindProxyService(service.Service):
         self.portal = portal
 
     def startService(self):
-        #log.startLogging(sys.stderr)
         scp = load_config(instance_config=self.instance_config)
         validate_config(scp)
         endpoint = self.endpoint
@@ -219,32 +227,15 @@ class BindProxyService(service.Service):
                 certData = f.read()
             cert = ssl.PrivateCertificate.loadPEM(certData)
             factory.options = cert.options()
-        proxied_locations = []
+        proxied_endpoints = []
         last_proxied_scheme = None
         for opt in scp.options("LDAP"):
-            if opt.startswith("proxied_url"):
-                proxied_scheme, proxied_host, proxied_port = parse_url(
-                    scp.get("LDAP", opt))
-                if last_proxied_scheme is None:
-                    last_proxied_scheme = proxied_scheme
-                elif proxied_scheme != last_proxied_scheme:
-                    log.msg(
-                        "[ERROR] Mixed LDAP schemes ('{0}' and '{1}') are not implemented.".format(
-                            last_proxied_scheme, proxied_scheme))
-                    sys.exit(1)
-                proxied_locations.append((proxied_host, proxied_port))
-        if len(proxied_locations) == 0:
-            log.msg("[ERROR] No proxied locations specified.")
-        elif len(proxied_locations) == 1:
-            proxied = proxied_locations[0]
-            slo = {'': proxied, }
-            cfg = config.LDAPConfig(serviceLocationOverrides=slo)
-        else:
-            slo = {'': proxied_locations}
-            cfg = MultiLocationLDAPConfig(serviceLocationOverrides=slo)
-        if proxied_scheme == 'ldaps':
-            log.msg("[ERROR] `ldaps` scheme is not supported.")
-            sys.exit(0)
+            if opt.startswith("proxied_endpoint"):
+                proxied_endpoint = scp.get("LDAP", opt)
+                proxied_endpoints.append(proxied_endpoint)
+        if len(proxied_endpoints) == 0:
+            log.msg("[ERROR] No proxied endpoints specified.")
+            sys.exit(1)
         use_tls = scp.getboolean('LDAP', 'use_starttls')
         if scp.has_option('Application', 'debug'):
             debug_app = scp.getboolean('Application', 'debug')
@@ -290,12 +281,15 @@ class BindProxyService(service.Service):
             use_cluster = True
             clusterClient = LRUClusterClient(cluster_peers)
             clusterClient.debug = debug_cache
+
         def make_protocol():
-            proto = BindProxy(cfg, use_tls=use_tls)
+            proto = BindProxy()
             proto.debug = debug_app
-            proto.bind_dn = None
+            proto.use_tls = use_tls
+            proto.clientConnector = makeClientConnector(reactor, proxied_endpoints)
             proto.searchResponses = {}
             return proto
+
         factory.protocol = make_protocol
         kwds = {}
         if use_cluster:
