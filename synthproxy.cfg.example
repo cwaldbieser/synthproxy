@@ -1,0 +1,15 @@
+
+[Application]
+debug = 1
+debug_cache = 1
+endpoint = 10390
+
+[LDAP]
+proxied_endpoint_0 = tcp:host=127.0.0.1:port=8080
+proxied_endpoint_1 = tcp:host=127.0.0.1:port=8081
+use_starttls = 0
+
+[CouchDB]
+user=magic
+passwd=xyzzy
+url = http://127.0.0.1:18080/doc.json

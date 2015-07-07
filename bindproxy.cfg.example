@@ -1,0 +1,12 @@
+
+[Application]
+debug = 1
+debug_cache = 0
+endpoint = tcp:10389
+bind_cache_lifetime = 600
+bind_cache_size = 1000
+
+[LDAP]
+proxied_endpoint = tcp:host=127.0.0.1:port=8080
+use_starttls = 0
+
