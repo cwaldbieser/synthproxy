@@ -9,7 +9,10 @@ from functools import partial
 import json
 import os.path
 import sys
-import httpclient
+from http import (
+    createNonVerifyingHTTPClient,
+    createVerifyingHTTPClient,
+)
 from proxies.lru import (
     LRUTimedCache, LRUClusterProtocolFactory,
     LRUClusterClient, make_cluster_func)
@@ -250,7 +253,8 @@ def validate_config(config):
         'Application': lambda x: x in frozenset([
             'debug', 'debug_cache', 'endpoint', 'search_cache_lifetime', 'search_cache_size']),
         'LDAP': isValidLDAPOption,
-        'Cluster': isValidClusterOption
+        'Cluster': isValidClusterOption,
+        'CouchDB': lambda x: x in frozenset(['verify', 'ca_cert'])
         }
     valid = True
     for section, options in required.iteritems():
@@ -318,6 +322,12 @@ class SynthProxyService(service.Service):
         db_url = scp.get("CouchDB", "url")
         db_user = scp.get("CouchDB", "user")
         db_passwd = scp.get("CouchDB", "passwd") 
+        verify_couchdb = True
+        if scp.has_option("CouchDB", "verify"):
+            verify_couchdb_cert = scp.getbool("CouchDB", "verify")
+        couchdb_ca_cert = None
+        if scp.has_option("CouchDB", "ca_cert"):
+            couchdb_ca_cert = scp.getbool("CouchDB", "ca_cert")
         factory = protocol.ServerFactory()
         if scp.has_option("LDAP", "proxy_cert"):
             proxy_cert = scp.get("LDAP", "proxy_cert")
@@ -380,6 +390,14 @@ class SynthProxyService(service.Service):
             proto.membership_view_url = db_url
             proto.db_user = db_user
             proto.db_passwd = db_passwd
+            if not verify_couchdb:
+                httpclient = createNonVerifyingHTTPClient()
+            else:
+                if couchdb_ca_cert is not None:
+                    extra_ca_certs = [couchdb_ca_cert]
+                else:
+                    extra_ca_certs = None
+                httpclient = createVerifyingHTTPClient(extra_ca_cers=extra_ca_certs)
             proto.http_client = httpclient
             proto.searchResponses = {}
             return proto
