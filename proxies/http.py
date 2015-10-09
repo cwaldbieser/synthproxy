@@ -43,7 +43,7 @@ def createVerifyingHTTPClient(reactor, extra_ca_certs=None, agent_kwds=None, **k
             cert = crypto.load_certificate(crypto.FILETYPE_PEM, data)
             del data
             trust_anchors.append(cert)
-        policy = CustomPolicyForHTTPS(extra_ca_certs)
+        policy = CustomPolicyForHTTPS(trust_anchors)
     else:
         policy = BrowserLikePolicyForHTTPS()
     agent_kwds['contextFactory'] = policy

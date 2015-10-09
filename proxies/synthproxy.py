@@ -123,7 +123,8 @@ class SynthProxy(proxybase.ProxyBase):
             d0 = self.http_client.get(
                 self.membership_view_url, 
                 auth=(self.db_user, self.db_passwd), 
-                params=dict(startkey=json.dumps([dn]), endkey=json.dumps([dn, {}, {}])))
+                params=dict(key=json.dumps(dn)),
+            )
             d0.addCallback(treq.json_content)
             d0.addCallback(self._scheduleExpireCache, dn)
             pending = []
@@ -197,7 +198,8 @@ class SynthProxy(proxybase.ProxyBase):
         """
         if doc is not None:
             attribs = response.attributes
-            all_attribs = len(requested_attributes) == 0
+            all_attribs = (len(requested_attributes) == 0) 
+            all_attribs = all_attribs or '*' in requested_attributes
             attrib_map = dict((k,v) for k, v in response.attributes)
             rows = doc["rows"]
             changed = False
@@ -324,10 +326,10 @@ class SynthProxyService(service.Service):
         db_passwd = scp.get("CouchDB", "passwd") 
         verify_couchdb = True
         if scp.has_option("CouchDB", "verify"):
-            verify_couchdb_cert = scp.getbool("CouchDB", "verify")
+            verify_couchdb_cert = scp.getboolean("CouchDB", "verify")
         couchdb_ca_cert = None
         if scp.has_option("CouchDB", "ca_cert"):
-            couchdb_ca_cert = scp.getbool("CouchDB", "ca_cert")
+            couchdb_ca_cert = scp.get("CouchDB", "ca_cert")
         factory = protocol.ServerFactory()
         if scp.has_option("LDAP", "proxy_cert"):
             proxy_cert = scp.get("LDAP", "proxy_cert")
@@ -397,7 +399,7 @@ class SynthProxyService(service.Service):
                     extra_ca_certs = [couchdb_ca_cert]
                 else:
                     extra_ca_certs = None
-                httpclient = createVerifyingHTTPClient(extra_ca_cers=extra_ca_certs)
+                httpclient = createVerifyingHTTPClient(reactor, extra_ca_certs=extra_ca_certs)
             proto.http_client = httpclient
             proto.searchResponses = {}
             return proto

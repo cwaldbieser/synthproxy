@@ -6,7 +6,7 @@ idna==1.1
 ipaddress==1.0.7
 klein==15.0.0
 #-e git+https://github.com/cwaldbieser/ldaptor.git@d8465d7803fc7904c07d688b9f7d14ad1cf09b29#egg=ldaptor-master
--e git+https://github.com/cwaldbieser/ldaptor.git@4b2dca591a8a084ccb8c14aeaf1397c104e0c0bb#egg=ldaptor-master
+-e git+https://github.com/cwaldbieser/ldaptor.git#egg=ldaptor-master
 ordereddict==1.1
 pyasn1==0.1.7
 pyasn1-modules==0.0.5

@@ -136,3 +136,32 @@ To run as a daemon::
 
 Additional options can be found by adding the `--help` option.
 
+=============
+CouchDB Setup
+=============
+
+Your CouchDB database must be set up with a design document and a view that 
+will emit a value which is a 2 element list-- the attribute name and an
+attribute value.  Multi-values attributes may should emit multiple rows.
+
+An example view is as follows:
+.. code-block:: javascript
+
+    {
+       "attribs": {
+           "map": "function(doc) {\n  var dn = doc[\"dn\"];\n  var attrib = doc[\"attrib\"];\n  var value = doc[\"value\"];\n  emit(dn, [attrib, value]);\n}"
+       }
+    }
+
+An example document might look like this:
+.. code-block:: javascript
+
+    {
+        "_id": "2788d56289351b834ae127701e002e09", 
+        "_rev": "3-5e5212a443d68ee10b989b515fe6abed", 
+        "attrib": "memberOf", 
+        "dn": "uid=esteban,ou=people,dc=example,dc=fr", 
+        "order": 0, 
+        "value": "cn=warriors,ou=groups,dc=example,dc=fr"
+    }
+
